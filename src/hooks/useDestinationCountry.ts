@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { IS_MALDIVES_STOREFRONT, MALDIVES_COUNTRY_NAME } from '../config/market';
 
 // Default guest location to United States until IP-based geo-location resolves
 const GUEST_DESTINATION_FALLBACK = 'United States';
@@ -35,6 +36,7 @@ export function useDestinationCountry(options?: { userId?: string | null; userCo
   const userCountry = String(options?.userCountry || '').trim();
 
   const [selectedCountry, setSelectedCountry] = useState<string>(() => {
+    if (IS_MALDIVES_STOREFRONT) return MALDIVES_COUNTRY_NAME;
     // Signed-in: profile country (from auth) only — no localStorage. DB-backed
     // resolution runs in the effect below and fills any gap.
     if (userId) {
@@ -44,6 +46,11 @@ export function useDestinationCountry(options?: { userId?: string | null; userCo
   });
 
   useEffect(() => {
+    if (IS_MALDIVES_STOREFRONT) {
+      setSelectedCountry(MALDIVES_COUNTRY_NAME);
+      return;
+    }
+
     let cancelled = false;
 
     const resolveCountry = async () => {

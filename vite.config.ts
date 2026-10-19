@@ -24,6 +24,17 @@ export default defineConfig({
     react(),
     envGuard(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']),
     {
+      name: 'maldives-public-url-guard',
+      configResolved(config) {
+        if (config.command !== 'build' || config.env.VITE_MARKET !== 'MV') return;
+        if (!config.env.VITE_PUBLIC_APP_URL) {
+          throw new Error(
+            '\nBuild aborted — set VITE_PUBLIC_APP_URL to the BZEAD.MV public origin in the Amplify environment.\n'
+          );
+        }
+      },
+    },
+    {
       name: 'security-headers',
       configureServer(server) {
         server.middlewares.use((_req, res, next) => {

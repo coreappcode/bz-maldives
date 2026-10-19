@@ -16,8 +16,9 @@ function loadLocalEnvIfNeeded() {
 let SUPABASE_URL = '';
 let SUPABASE_ANON_KEY = '';
 let SITE_URL = 'https://www.bzead.com';
-const DIST_DIR = path.resolve(process.cwd(), 'dist');
-const SHARE_DIR = path.join(DIST_DIR, 'share');
+let DIST_DIR = path.resolve(process.cwd(), 'dist');
+let SHARE_DIR = path.join(DIST_DIR, 'share');
+let isBuyerBuild = false;
 
 const PAGE_SIZE = 500;
 
@@ -55,8 +56,8 @@ function buildShareHtml(product) {
   const image = resolveSocialImageUrl(slug, resolveImageUrl(product));
   const productUrl = `${SITE_URL}/products/${encodeURIComponent(slug)}`;
   const shareUrl = `${SITE_URL}/share/${encodeURIComponent(slug)}`;
-  const price = product?.price == null ? '' : String(product.price);
-  const currency = String(product?.currency || 'INR');
+  const price = isBuyerBuild || product?.price == null ? '' : String(product.price);
+  const currency = isBuyerBuild ? '' : String(product?.currency || 'INR');
   const brand = String(product?.brand || '').trim();
 
   return `<!DOCTYPE html>
@@ -155,9 +156,15 @@ async function main() {
 
   SUPABASE_URL = String(process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
   SUPABASE_ANON_KEY = String(process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  isBuyerBuild = process.argv.includes('--buyer');
+  if (isBuyerBuild && !String(process.env.VITE_PUBLIC_APP_URL || '').trim()) {
+    throw new Error('VITE_PUBLIC_APP_URL must be set to the BZEAD.MV public origin for the buyer build.');
+  }
   SITE_URL = String(process.env.VITE_PUBLIC_APP_URL || process.env.VITE_DOMAIN || 'https://bzead.com')
     .trim()
     .replace(/\/+$/, '');
+  DIST_DIR = path.resolve(process.cwd(), isBuyerBuild ? 'dist-buyer' : 'dist');
+  SHARE_DIR = path.join(DIST_DIR, 'share');
 
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     console.warn('[share-pages] Skipped: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
@@ -194,7 +201,7 @@ async function main() {
 </html>`;
   await writeFile(path.join(SHARE_DIR, 'index.html'), shareRootHtml, 'utf8');
 
-  console.log(`[share-pages] Generated ${seen.size} static share pages in dist/share`);
+  console.log(`[share-pages] Generated ${seen.size} static share pages in ${path.relative(process.cwd(), SHARE_DIR)}`);
 }
 
 main().catch((err) => {

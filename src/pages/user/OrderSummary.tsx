@@ -12,9 +12,15 @@ import {
 } from '../../lib/checkoutPricingService';
 import { fetchPublicProductPrices } from '../../lib/pricingService';
 import { supabase } from '../../lib/supabase';
-import { formatCurrency, isExchangeRateUnavailable } from '../../utils/currency';
+import { formatCurrency, hasCurrencyRate, isExchangeRateUnavailable } from '../../utils/currency';
 import { fetchMultiSellerTat, checkDeliveryServiceability } from '../../lib/tatService';
 import { Footer } from '../../components/layout/Footer';
+import {
+  IS_MALDIVES_STOREFRONT,
+  isMaldivesCountry,
+  MALDIVES_CURRENCY_CODE,
+  MALDIVES_COUNTRY_NAME,
+} from '../../config/market';
 
 interface ShippingData {
   street: string;
@@ -68,7 +74,9 @@ const OrderSummaryPage: React.FC = () => {
     [items, selectedCartItemIds],
   );
 
-  const destinationCountryForPricing = shippingData?.country || user?.country || '';
+  const destinationCountryForPricing = IS_MALDIVES_STOREFRONT
+    ? MALDIVES_COUNTRY_NAME
+    : shippingData?.country || user?.country || '';
 
   useEffect(() => {
     const loadPublicPrices = async () => {
@@ -121,7 +129,12 @@ const OrderSummaryPage: React.FC = () => {
     const savedShipping = localStorage.getItem('beauzead_checkout_shipping');
     try {
       if (savedShipping) {
-        setShippingData(JSON.parse(savedShipping));
+        const parsedShipping = JSON.parse(savedShipping) as ShippingData;
+        if (IS_MALDIVES_STOREFRONT && !isMaldivesCountry(parsedShipping.country)) {
+          navigate('/checkout/shipping');
+          return;
+        }
+        setShippingData(parsedShipping);
       } else {
         navigate('/checkout/shipping');
       }
@@ -249,7 +262,9 @@ const OrderSummaryPage: React.FC = () => {
       } catch (err) {
         console.error('Failed to refresh checkout pricing:', err);
         if (pricingRequestRef.current === requestId) {
-          setPricingError('Unable to load backend checkout configuration. Please refresh and try again.');
+          setPricingError(err instanceof Error
+            ? err.message
+            : 'Unable to load backend checkout configuration. Please refresh and try again.');
           setPricing(null);
         }
         if (pricingRequestRef.current === requestId) {
@@ -267,11 +282,18 @@ const OrderSummaryPage: React.FC = () => {
     () => new Map((pricing?.items || []).map((item) => [item.productId, item])),
     [pricing]
   );
-  const targetCurrency = (pricing?.currency || 'INR').toUpperCase();
+  const targetCurrency = (
+    pricing?.currency || (IS_MALDIVES_STOREFRONT ? MALDIVES_CURRENCY_CODE : 'INR')
+  ).toUpperCase();
   const requiresFxConversion = Boolean(
     pricing?.items?.some((line) => String(line.sourceCurrency || '').toUpperCase() !== targetCurrency)
   );
-  const fxUnavailableForCheckout = requiresFxConversion && isExchangeRateUnavailable();
+  const fxUnavailableForCheckout = IS_MALDIVES_STOREFRONT
+    ? !hasCurrencyRate(MALDIVES_CURRENCY_CODE, rates)
+      || Boolean(pricing?.items?.some((line) =>
+        String(line.sourceCurrency || '').toUpperCase() !== MALDIVES_CURRENCY_CODE
+        && !hasCurrencyRate(line.sourceCurrency, rates)))
+    : requiresFxConversion && isExchangeRateUnavailable();
 
   // Determine if this is an international order in the render scope
   const destCountryForRender = (shippingData?.country || user?.country || '').trim().toUpperCase().replace(/\s+/g, '');
@@ -322,12 +344,18 @@ const OrderSummaryPage: React.FC = () => {
     && !minimumOrderNotMet
     && !pricingError
     && !productValidationWarning
+    && !IS_MALDIVES_STOREFRONT
   );
 
   const calculateTotal = () => displayTotal;
 
   const handleProceedToPayment = async () => {
     setProceedError(null);
+    if (IS_MALDIVES_STOREFRONT) {
+      setProceedError('Online payment in MVR is unavailable through the current Stripe integration. Cash on Delivery is not available for international orders, so no order can be submitted.');
+      return;
+    }
+
     const userId = user?.id || currentAuthUser?.userId;
     if (!userId) {
       navigate('/login', { state: { from: '/checkout/shipping' } });
@@ -438,7 +466,7 @@ const OrderSummaryPage: React.FC = () => {
         shippingServiceLevel: activeOption?.serviceLevel || undefined,
         shippingRateId: activeOption?.rateId || undefined,
         shippingProvider: activeOption?.provider || (!isInternationalOrder && isIndiaDestinationOrder ? 'shiprocket' : undefined),
-        currency: pricing?.currency || 'INR',
+        currency: targetCurrency,
         shippingAddress: {
           street: shippingData.street,
           city: shippingData.city,
@@ -568,14 +596,14 @@ const OrderSummaryPage: React.FC = () => {
                         <div className="flex items-center gap-4 mt-1.5">
                           <span className="text-[15px] font-bold text-[#b12704]">
                             {pricingByProductId.get(item.product.id)?.convertedUnitPrice
-                              ? formatCurrency(pricingByProductId.get(item.product.id)!.convertedUnitPrice, pricing?.currency || 'INR')
+                              ? formatCurrency(pricingByProductId.get(item.product.id)!.convertedUnitPrice, targetCurrency)
                               : <span className="text-gray-400 text-xs animate-pulse">Pricing…</span>}
                           </span>
                           <span className="text-[12px] text-[#555] bg-[#f0f0f0] px-2.5 py-0.5 rounded">Qty: {item.quantity}</span>
                         </div>
                         {(pricingByProductId.get(item.product.id)?.offerDiscount || 0) > 0 && (
                           <p className="text-[12px] text-[#067d62] font-semibold mt-1">
-                            -{formatCurrency(pricingByProductId.get(item.product.id)?.offerDiscount || 0, pricing?.currency || 'INR')} offer
+                            -{formatCurrency(pricingByProductId.get(item.product.id)?.offerDiscount || 0, targetCurrency)} offer
                           </p>
                         )}
                         {pricingByProductId.get(item.product.id)?.minQuantityWarning && (
@@ -605,12 +633,12 @@ const OrderSummaryPage: React.FC = () => {
                 )}
                 <div className="flex justify-between text-[14px]">
                   <span className="text-[#555]">Items ({activeCartItems.length})</span>
-                  <span>{formatCurrency(pricing?.subtotal || 0, pricing?.currency || 'INR')}</span>
+                  <span>{formatCurrency(pricing ? pricing.subtotal : Number.NaN, targetCurrency)}</span>
                 </div>
                 {(pricing?.offerDiscount || 0) > 0 && (
                   <div className="flex justify-between text-[14px] text-[#067d62] font-semibold">
                     <span>Savings</span>
-                    <span>-{formatCurrency(pricing?.offerDiscount || 0, pricing?.currency || 'INR')}</span>
+                    <span>-{formatCurrency(pricing?.offerDiscount || 0, targetCurrency)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-[14px]">
@@ -619,7 +647,7 @@ const OrderSummaryPage: React.FC = () => {
                     ? <span className="text-[#b12704] font-semibold text-xs">Not a Serviceable Area</span>
                     : (!pricing || pricingLoading)
                       ? <span className="text-gray-400 text-xs animate-pulse">Calculating...</span>
-                      : <span className="text-[#067d62] font-semibold">{(displayShipping || 0) === 0 && !pricing.hasInternationalItems ? 'FREE' : formatCurrency(displayShipping, pricing.currency || 'INR')}</span>
+                      : <span className="text-[#067d62] font-semibold">{(displayShipping || 0) === 0 && !pricing.hasInternationalItems ? 'FREE' : formatCurrency(displayShipping, targetCurrency)}</span>
                   }
                 </div>
 
@@ -674,7 +702,7 @@ const OrderSummaryPage: React.FC = () => {
                             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Best Value</span>
                           </div>
                           <span className="text-sm font-bold text-gray-900">
-                            {formatCurrency(tierOptions.standard.shipping, pricing?.currency || 'INR')}
+                            {formatCurrency(tierOptions.standard.shipping, targetCurrency)}
                           </span>
                         </div>
                         {tierOptions.standard.carrierName && (
@@ -724,7 +752,7 @@ const OrderSummaryPage: React.FC = () => {
                               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">Priority</span>
                             </div>
                             <span className="text-sm font-bold text-gray-900">
-                              {formatCurrency(tierOptions.premium.shipping, pricing?.currency || 'INR')}
+                              {formatCurrency(tierOptions.premium.shipping, targetCurrency)}
                             </span>
                           </div>
                           {tierOptions.premium.carrierName && (
@@ -775,7 +803,7 @@ const OrderSummaryPage: React.FC = () => {
                               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700">Fastest</span>
                             </div>
                             <span className="text-sm font-bold text-gray-900">
-                              {formatCurrency(tierOptions.express.shipping, pricing?.currency || 'INR')}
+                              {formatCurrency(tierOptions.express.shipping, targetCurrency)}
                             </span>
                           </div>
                           {tierOptions.express.carrierName && (
@@ -830,7 +858,7 @@ const OrderSummaryPage: React.FC = () => {
 
               {minimumOrderNotMet && minimumOrderConstraint && (
                 <div className="mb-4 rounded-lg bg-[#0B2A66] px-4 py-3 text-sm text-white">
-                  <p className="font-semibold">Minimum product value for shipment is <strong>{formatCurrency(minimumOrderConstraint.minimumInCheckoutCurrency, pricing?.currency || 'INR')}</strong></p>
+                  <p className="font-semibold">Minimum product value for shipment is <strong>{formatCurrency(minimumOrderConstraint.minimumInCheckoutCurrency, targetCurrency)}</strong></p>
                   <p className="mt-1 text-white/80 text-xs">Add more items to complete your order.</p>
                 </div>
               )}
@@ -851,7 +879,7 @@ const OrderSummaryPage: React.FC = () => {
                 <div className="border-t-2 border-[#ddd] pt-3 mt-3 mb-4">
                   <div className="flex justify-between text-[18px] font-bold text-[#b12704]">
                     <span>Order Total</span>
-                    <span>{formatCurrency(calculateTotal(), pricing?.currency || 'INR')}</span>
+                    <span>{formatCurrency(pricing ? calculateTotal() : Number.NaN, targetCurrency)}</span>
                   </div>
                 </div>
               )}
@@ -859,6 +887,12 @@ const OrderSummaryPage: React.FC = () => {
               {proceedError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm mb-3">
                   {proceedError}
+                </div>
+              )}
+
+              {IS_MALDIVES_STOREFRONT && (
+                <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Online payment in MVR is unavailable through the current Stripe integration. Cash on Delivery is not available for international orders, so no order can be submitted.
                 </div>
               )}
 
@@ -879,6 +913,8 @@ const OrderSummaryPage: React.FC = () => {
                     ? 'Refreshing Shipping...'
                     : deliveryEstimateLoading
                       ? 'Fetching Delivery Date...'
+                    : IS_MALDIVES_STOREFRONT
+                      ? 'MVR payment unavailable'
                     : pincodeNotServiceable
                       ? 'Pincode not serviceable'
                     : pricingError
@@ -889,19 +925,23 @@ const OrderSummaryPage: React.FC = () => {
                 </button>
               )}
 
-              <div className="flex items-center justify-center gap-1.5 text-[12px] text-[#067d62] mt-3">
-                🔒 Secure checkout powered by Stripe
-              </div>
+              {!IS_MALDIVES_STOREFRONT && (
+                <div className="flex items-center justify-center gap-1.5 text-[12px] text-[#067d62] mt-3">
+                  🔒 Secure checkout powered by Stripe
+                </div>
+              )}
 
               <hr className="border-t border-[#eee] my-4" />
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[12px] text-[#555]">Accepted:</span>
-                <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">Visa</span>
-                <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">Mastercard</span>
-                <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">RuPay</span>
-                <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">UPI</span>
-              </div>
+              {!IS_MALDIVES_STOREFRONT && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[12px] text-[#555]">Accepted:</span>
+                  <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">Visa</span>
+                  <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">Mastercard</span>
+                  <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">RuPay</span>
+                  <span className="px-2 py-1 bg-[#f0f0f0] rounded text-[11px] font-semibold text-[#555]">UPI</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

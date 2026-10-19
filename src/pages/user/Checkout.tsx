@@ -12,6 +12,10 @@ import type { OrderData } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency as fmtCurrency } from '../../utils/currency';
 import {
+  IS_MALDIVES_STOREFRONT,
+  MALDIVES_CURRENCY_CODE,
+} from '../../config/market';
+import {
   getStripe,
   createPaymentIntent,
   toStripeAmount,
@@ -1674,6 +1678,16 @@ const Checkout: React.FC = () => {
     setLiveQuoteLoading(true);
     setLiveQuoteError(null);
 
+    if (
+      IS_MALDIVES_STOREFRONT
+      && String(checkoutData.currency || '').toUpperCase() !== MALDIVES_CURRENCY_CODE
+    ) {
+      setLiveQuote(null);
+      setLiveQuoteError('BZEAD.MV requires an MVR checkout amount. Payment was stopped to prevent a currency mismatch.');
+      setLiveQuoteLoading(false);
+      return;
+    }
+
     void (async () => {
       try {
         const quote = await calculateDestinationCheckoutPricing({
@@ -1767,12 +1781,19 @@ const Checkout: React.FC = () => {
         setLoading(true);
         setInitError(null);
 
+        const checkoutCurrency = (checkoutData.currency || 'INR').toUpperCase();
+        if (IS_MALDIVES_STOREFRONT && checkoutCurrency !== MALDIVES_CURRENCY_CODE) {
+          throw new Error('BZEAD.MV requires an MVR checkout amount. Payment was stopped to prevent a currency mismatch.');
+        }
+        if (IS_MALDIVES_STOREFRONT) {
+          throw new Error('MVR payments are not supported by Stripe. No payment was attempted; online checkout is unavailable until an MVR-supported payment method is configured.');
+        }
+
         const stripePublishableKey = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim();
         if (!stripePublishableKey) {
           throw new Error('Online payments are temporarily unavailable. Stripe is not configured.');
         }
 
-        const checkoutCurrency = (checkoutData.currency || 'INR').toUpperCase();
         const billedTotal = liveQuote.totalAmount;
         const stripeAmount = toStripeAmount(billedTotal, checkoutCurrency);
         if (!Number.isFinite(stripeAmount) || stripeAmount <= 0) {
@@ -2055,6 +2076,10 @@ const Checkout: React.FC = () => {
     );
   }
 
+  const isMarketCurrencyPaymentBlocked = initError?.startsWith('MVR payments are not supported by Stripe.')
+    || initError?.startsWith('BZEAD.MV requires an MVR checkout amount.');
+  const canRetryPaymentInitialization = !IS_MALDIVES_STOREFRONT || !isMarketCurrencyPaymentBlocked;
+
   if (initError) {
     if (codEligible && !minimumOrderNotMet) {
       // Keep rendering — CheckoutForm handles COD internally
@@ -2066,20 +2091,28 @@ const Checkout: React.FC = () => {
           <div className="max-w-2xl mx-auto px-4">
             <div className="bg-red-50 border border-red-200 rounded-md p-5 md:p-6 text-center">
               <AlertCircle size={36} className="mx-auto mb-3 md:mb-4 text-red-500" />
-              <h2 className="text-base md:text-lg font-bold text-red-900 mb-2">Payment Initialization Failed</h2>
+              <h2 className="text-base md:text-lg font-bold text-red-900 mb-2">
+                {initError.includes('MVR payments are not supported')
+                  ? 'Online payments in MVR are unavailable'
+                  : initError.includes('requires an MVR checkout amount')
+                    ? 'Checkout currency mismatch'
+                    : 'Payment Initialization Failed'}
+              </h2>
               <p className="text-sm text-red-700 mb-5 md:mb-6 break-words">{initError}</p>
               <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 justify-center">
-                <button
-                  onClick={() => {
-                    setInitError(null);
-                    setLiveQuoteError(null);
-                    setLoading(true);
-                    setPaymentInitRetryToken((t) => t + 1);
-                  }}
-                  className="px-5 py-2.5 md:px-6 md:py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-md font-semibold text-sm"
-                >
-                  Try Again
-                </button>
+                {canRetryPaymentInitialization && (
+                  <button
+                    onClick={() => {
+                      setInitError(null);
+                      setLiveQuoteError(null);
+                      setLoading(true);
+                      setPaymentInitRetryToken((t) => t + 1);
+                    }}
+                    className="px-5 py-2.5 md:px-6 md:py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-md font-semibold text-sm"
+                  >
+                    Try Again
+                  </button>
+                )}
                 <button
                   onClick={() => navigate('/checkout/review')}
                   className="px-5 py-2.5 md:px-6 md:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-semibold text-sm"

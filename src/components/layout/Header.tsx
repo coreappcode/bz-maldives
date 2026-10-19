@@ -12,6 +12,7 @@ import logger from '../../utils/logger';
 import { useAppNavigation } from '../../App';
 import { isNativePlatform } from '../../mobile/nativePlatform';
 import { openExternalUrl } from '../../mobile/externalLinks';
+import { IS_MALDIVES_STOREFRONT } from '../../config/market';
 import { withBase } from '../../config/baseUrl';
 
 export interface HeaderDetectedLocation {
@@ -248,11 +249,11 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   // "Become a Seller" handler.
-  // • Web      → just navigate to /seller (in-app route).
-  // • Native   → confirm first; on accept, open bzead.com/seller in the
+  // • Web      → open the public seller portal.
+  // • Native   → confirm first; on accept, open the public seller URL in the
   //              system browser because the buyer app build excludes seller routes.
   const handleBecomeSellerClick = (e: React.MouseEvent) => {
-    if (!isNativePlatform) return; // web: let <Link> navigate normally
+    if (!isNativePlatform) return; // web: let the anchor navigate normally
     e.preventDefault();
     setShowMobileMenu(false);
     setShowSellerConfirm(true);
@@ -261,10 +262,10 @@ export const Header: React.FC<HeaderProps> = ({
   const handleBecomeSellerConfirm = () => {
     setShowSellerConfirm(false);
     // Open the seller portal in a Chrome Custom Tab on native (via
-    // @capacitor/browser) and a new tab on web. The buyer Android app
-    // shell never renders seller routes. Always resolves to the public
-    // BASE_URL — users must never see the internal Capacitor origin.
-    void openExternalUrl(withBase('/seller'));
+    // @capacitor/browser) because the buyer app build excludes seller routes.
+    void openExternalUrl(
+      IS_MALDIVES_STOREFRONT ? 'https://www.bzead.com/seller' : withBase('/seller'),
+    );
   };
 
   const handleSignOutConfirm = async () => {
@@ -335,7 +336,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Desktop Right Side Actions */}
           <div className="hidden md:flex items-center space-x-4">
-            {enableLocationAutoDetect && (
+            {enableLocationAutoDetect && !IS_MALDIVES_STOREFRONT && (
               <button
                 type="button"
                 onClick={() => void requestAndApplyLocation(true)}
@@ -354,32 +355,44 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             {/* Currency Selector */}
-            <div className="relative">
-              <select
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className={`h-8 min-w-[88px] appearance-none bg-white text-slate-900 border border-amber-200 rounded-lg px-2 py-1 pr-6 text-xs font-semibold hover:border-amber-400 transition-all duration-300 cursor-pointer ${switchingCurrency ? 'opacity-50 pointer-events-none' : ''}`}
-                disabled={currencyLoading || switchingCurrency || !canUseManualCurrencySelector}
-              >
-                {SUPPORTED_CURRENCIES.map((curr) => (
-                  <option key={curr.code} value={curr.code}>
-                    {curr.symbol} {curr.code}
-                  </option>
-                ))}
-              </select>
-              {(currencyLoading || switchingCurrency) && (
-                <Loader2 className="absolute right-1.5 top-1.5 h-4 w-4 text-[#D4AF37] animate-spin" />
-              )}
-            </div>
+            {!IS_MALDIVES_STOREFRONT && (
+              <div className="relative">
+                <select
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                  className={`h-8 min-w-[88px] appearance-none bg-white text-slate-900 border border-amber-200 rounded-lg px-2 py-1 pr-6 text-xs font-semibold hover:border-amber-400 transition-all duration-300 cursor-pointer ${switchingCurrency ? 'opacity-50 pointer-events-none' : ''}`}
+                  disabled={currencyLoading || switchingCurrency || !canUseManualCurrencySelector}
+                >
+                  {SUPPORTED_CURRENCIES.map((curr) => (
+                    <option key={curr.code} value={curr.code}>
+                      {curr.symbol} {curr.code}
+                    </option>
+                  ))}
+                </select>
+                {(currencyLoading || switchingCurrency) && (
+                  <Loader2 className="absolute right-1.5 top-1.5 h-4 w-4 text-[#D4AF37] animate-spin" />
+                )}
+              </div>
+            )}
 
             {/* Become a Seller Button */}
-            <Link
-              to="/seller"
-              onClick={handleBecomeSellerClick}
-              className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
-            >
-              Become a Seller
-            </Link>
+            {IS_MALDIVES_STOREFRONT ? (
+              <a
+                href="https://www.bzead.com/seller"
+                onClick={handleBecomeSellerClick}
+                className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
+              >
+                Become a Seller
+              </a>
+            ) : (
+              <Link
+                to="/seller"
+                onClick={handleBecomeSellerClick}
+                className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
+              >
+                Become a Seller
+              </Link>
+            )}
 
             {/* Wishlist */}
             <button
@@ -579,7 +592,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Mobile Right Side - Cart, Wishlist, Menu */}
           <div className="flex md:hidden items-center gap-1">
-            {enableLocationAutoDetect && (
+            {enableLocationAutoDetect && !IS_MALDIVES_STOREFRONT && (
               <button
                 type="button"
                 onClick={() => void requestAndApplyLocation(true)}
@@ -671,26 +684,28 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            <div className="mobile-menu-currency-row">
-              <span className="mobile-menu-currency-label">Currency</span>
-              <div className="relative flex-1">
-                <select
-                  value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                  className={`mobile-menu-currency-select ${switchingCurrency ? 'opacity-50' : ''}`}
-                  disabled={currencyLoading || switchingCurrency || !canUseManualCurrencySelector}
-                >
-                  {SUPPORTED_CURRENCIES.map((curr) => (
-                    <option key={curr.code} value={curr.code}>
-                      {curr.symbol} {curr.code}
-                    </option>
-                  ))}
-                </select>
-                {(currencyLoading || switchingCurrency) && (
-                  <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#D4AF37] animate-spin" />
-                )}
+            {!IS_MALDIVES_STOREFRONT && (
+              <div className="mobile-menu-currency-row">
+                <span className="mobile-menu-currency-label">Currency</span>
+                <div className="relative flex-1">
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                    className={`mobile-menu-currency-select ${switchingCurrency ? 'opacity-50' : ''}`}
+                    disabled={currencyLoading || switchingCurrency || !canUseManualCurrencySelector}
+                  >
+                    {SUPPORTED_CURRENCIES.map((curr) => (
+                      <option key={curr.code} value={curr.code}>
+                        {curr.symbol} {curr.code}
+                      </option>
+                    ))}
+                  </select>
+                  {(currencyLoading || switchingCurrency) && (
+                    <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#D4AF37] animate-spin" />
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {isLoggedIn ? (
               <>
@@ -754,21 +769,39 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             <div className="mobile-menu-links">
-              <Link
-                to="/seller"
-                className="mobile-menu-link-row"
-                onClick={(e) => {
-                  if (isNativePlatform) {
-                    handleBecomeSellerClick(e);
-                  } else {
-                    setShowMobileMenu(false);
-                  }
-                }}
-              >
-                <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
-                <span className="flex-1">Become a Seller</span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
-              </Link>
+              {IS_MALDIVES_STOREFRONT ? (
+                <a
+                  href="https://www.bzead.com/seller"
+                  className="mobile-menu-link-row"
+                  onClick={(e) => {
+                    if (isNativePlatform) {
+                      handleBecomeSellerClick(e);
+                    } else {
+                      setShowMobileMenu(false);
+                    }
+                  }}
+                >
+                  <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
+                  <span className="flex-1">Become a Seller</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
+                </a>
+              ) : (
+                <Link
+                  to="/seller"
+                  className="mobile-menu-link-row"
+                  onClick={(e) => {
+                    if (isNativePlatform) {
+                      handleBecomeSellerClick(e);
+                    } else {
+                      setShowMobileMenu(false);
+                    }
+                  }}
+                >
+                  <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
+                  <span className="flex-1">Become a Seller</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
+                </Link>
+              )}
               <Link
                 to="/contact"
                 className="mobile-menu-link-row"

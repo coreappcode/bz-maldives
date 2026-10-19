@@ -6,9 +6,9 @@ frontend:
         - npm ci
     build:
       commands:
-        - npm run build
+        - npm run build:buyer
   artifacts:
-    baseDirectory: dist
+    baseDirectory: dist-buyer
     files:
       - '**/*'
   cache:

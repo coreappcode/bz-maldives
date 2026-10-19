@@ -1,5 +1,10 @@
 import { supabase } from './supabase';
 import { convertAmount, resolveCurrencyFromCountry } from '../utils/currency';
+import {
+  IS_MALDIVES_STOREFRONT,
+  isMaldivesCountry,
+  MALDIVES_CURRENCY_CODE,
+} from '../config/market';
 
 export interface CheckoutPricingInputItem {
   productId: string;
@@ -392,6 +397,12 @@ const fetchShiprocketDomesticRate = async (params: {
 
 const resolveDestinationCurrency = async (country: string): Promise<string> => {
   const cleaned = country.trim();
+  if (IS_MALDIVES_STOREFRONT) {
+    if (cleaned && !isMaldivesCountry(cleaned)) {
+      throw new Error('BZEAD.MV checkout only supports delivery addresses in Maldives.');
+    }
+    return MALDIVES_CURRENCY_CODE;
+  }
   if (!cleaned) return 'INR';
   return resolveCurrencyFromCountry(cleaned);
 };
@@ -407,7 +418,9 @@ export async function calculateDestinationCheckoutPricing(input: {
   const destinationCountry = input.destinationCountry.trim();
 
   if (filteredItems.length === 0) {
-    const emptyCurrency = await resolveDestinationCurrency(destinationCountry || 'IN');
+    const emptyCurrency = await resolveDestinationCurrency(
+      destinationCountry || (IS_MALDIVES_STOREFRONT ? '' : 'IN'),
+    );
     return {
       currency: emptyCurrency,
       destinationCountry,
@@ -1798,6 +1811,43 @@ export async function calculateDestinationCheckoutPricing(input: {
     }
 
     ukDomesticShippingOptions = { standard: standardOption, premium: null, express: expressOption };
+  }
+
+  if (IS_MALDIVES_STOREFRONT) {
+    const convertedAmounts = [
+      subtotal,
+      offerDiscount,
+      platformHandlingCharge,
+      shipping,
+      total,
+      subtotalInrAccum,
+      platformShippingMargin,
+      ...lines.flatMap((line) => [
+        line.convertedUnitPrice,
+        line.convertedLineTotal,
+        line.convertedShippingTotal,
+        line.offerDiscount,
+      ]),
+      ...(minimumOrderConstraint
+        ? [
+            minimumOrderConstraint.minimumInCheckoutCurrency,
+            minimumOrderConstraint.currentSubtotalInCheckoutCurrency,
+          ]
+        : []),
+      ...(intlShippingOptions
+        ? [intlShippingOptions.standard, intlShippingOptions.premium, intlShippingOptions.express]
+            .filter((option): option is IntlShippingOption => option !== null)
+            .flatMap((option) => [option.shipping, option.total])
+        : []),
+      ...(ukDomesticShippingOptions
+        ? [ukDomesticShippingOptions.standard, ukDomesticShippingOptions.express]
+            .filter((option): option is IntlShippingOption => option !== null)
+            .flatMap((option) => [option.shipping, option.total])
+        : []),
+    ];
+    if (convertedAmounts.some((amount) => !Number.isFinite(amount))) {
+      throw new Error('MVR pricing or shipping conversion is unavailable. Checkout is blocked until the required exchange rates are available.');
+    }
   }
 
   return {

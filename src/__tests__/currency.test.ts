@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   convertAmount,
+  convertAmountStrict,
   formatCurrency,
   currencyForCountry,
   fetchExchangeRates,
@@ -84,6 +85,27 @@ describe('formatCurrency', () => {
   it('handles invalid currency gracefully', () => {
     const result = formatCurrency(50, 'ZZZZ');
     expect(result).toContain('50');
+  });
+
+  it('formats MVR as Maldivian Rufiyaa', () => {
+    const result = formatCurrency(1234.5, 'MVR');
+    expect(result).toContain('Rf');
+    expect(result).toContain('1,234.50');
+  });
+
+  it('does not render an unavailable MVR price as a number', () => {
+    expect(formatCurrency(Number.NaN, 'MVR')).toBe('MVR price unavailable');
+  });
+});
+
+describe('strict currency conversion', () => {
+  it('converts between INR and MVR using available rates', () => {
+    const rates = { USD: 1, INR: 83.5, MVR: 15.4485 };
+    expect(convertAmountStrict(835, 'INR', 'MVR', rates)).toBeCloseTo(154.485);
+  });
+
+  it('returns null when a required exchange rate is missing', () => {
+    expect(convertAmountStrict(835, 'INR', 'MVR', { USD: 1, INR: 83.5 })).toBeNull();
   });
 });
 

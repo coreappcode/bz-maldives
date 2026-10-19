@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import logger from '../utils/logger';
 import { fetchExchangeRates, convertAmount, formatCurrency, isExchangeRateUnavailable, resolveCurrencyFromCountry } from '../utils/currency';
 import { supabase } from '../lib/supabase';
+import { IS_MALDIVES_STOREFRONT, MALDIVES_CURRENCY_CODE } from '../config/market';
 
 interface CurrencyContextType {
   /** The user's active display currency (ISO 4217, e.g. "INR") */
@@ -23,7 +24,9 @@ interface CurrencyContextType {
 const CurrencyContext = createContext<CurrencyContextType | undefined>(undefined);
 
 export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currency, setCurrencyState] = useState<string>('USD'); // Default USD for guests until location detected
+  const [currency, setCurrencyState] = useState<string>(
+    IS_MALDIVES_STOREFRONT ? MALDIVES_CURRENCY_CODE : 'USD',
+  );
   const [rates, setRates] = useState<{ [key: string]: number }>({});
   const [loading, setLoading] = useState(true);
   const [switchingCurrency, setSwitchingCurrency] = useState(false);
@@ -35,6 +38,11 @@ export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // ── 1. Detect user's currency from profile → country → currency_code ──
   useEffect(() => {
+    if (IS_MALDIVES_STOREFRONT) {
+      setCurrencyState(MALDIVES_CURRENCY_CODE);
+      return;
+    }
+
     let cancelled = false;
 
     const detectCurrency = async () => {
@@ -220,6 +228,7 @@ export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // ── 3. Manual currency change (persists to localStorage) ──────────────
   const setCurrency = (newCurrency: string) => {
+    if (IS_MALDIVES_STOREFRONT) return;
     if (newCurrency === currency) return;
     setSwitchingCurrency(true);
     setCurrencyState(newCurrency);
@@ -236,6 +245,7 @@ export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // ── 3b. Location-detected currency (state only — does NOT persist) ──────
   // Skipped when the user has manually chosen a currency via the selector.
   const setDetectedCurrency = useCallback((code: string) => {
+    if (IS_MALDIVES_STOREFRONT) return;
     if (!code) return;
     const manualChoice = localStorage.getItem('beauzead_currency');
     if (manualChoice) return; // respect user's explicit selection
@@ -245,9 +255,14 @@ export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // ── 4. Conversion helper ──────────────────────────────────────────────
   const convertPrice = useCallback(
     (amount: number, fromCurrency: string = 'INR'): number => {
-      if (!Number.isFinite(amount) || amount === 0) return 0;
+      if (!Number.isFinite(amount)) return IS_MALDIVES_STOREFRONT ? Number.NaN : 0;
+      if (amount === 0) return 0;
       const sourceCurrency = (fromCurrency || 'INR').toUpperCase();
       const targetCurrency = (currency || 'INR').toUpperCase();
+
+      if (IS_MALDIVES_STOREFRONT) {
+        return convertAmount(amount, sourceCurrency, MALDIVES_CURRENCY_CODE, rates);
+      }
 
       if (isExchangeRateUnavailable()) return amount;
       if (sourceCurrency === targetCurrency) return amount;
@@ -262,6 +277,13 @@ export const CurrencyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     (amount: number, fromCurrency: string = 'INR'): string => {
       const sourceCurrency = (fromCurrency || 'INR').toUpperCase();
       const targetCurrency = (currency || 'INR').toUpperCase();
+
+      if (IS_MALDIVES_STOREFRONT) {
+        const converted = convertPrice(amount, sourceCurrency);
+        return Number.isFinite(converted)
+          ? formatCurrency(converted, MALDIVES_CURRENCY_CODE)
+          : 'MVR price unavailable';
+      }
 
       if (isExchangeRateUnavailable()) {
         return formatCurrency(amount, sourceCurrency);

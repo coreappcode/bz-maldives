@@ -3,6 +3,7 @@
 // ============================================================
 
 import { supabase } from '../lib/supabase';
+import { IS_MALDIVES_STOREFRONT, MALDIVES_CURRENCY_CODE } from '../config/market';
 
 type CountryCurrencyRow = {
   country_name: string | null;
@@ -28,7 +29,9 @@ const normalizeCountryToken = (value: string): string =>
 
 const compactCountryToken = (value: string): string => normalizeCountryToken(value).replace(/[^A-Z0-9]/g, '');
 
-const isValidCurrencyCode = (value: string): boolean => SUPPORTED_CURRENCIES.some((item) => item.code === value);
+const isValidCurrencyCode = (value: string): boolean =>
+  (IS_MALDIVES_STOREFRONT && value === MALDIVES_CURRENCY_CODE)
+  || SUPPORTED_CURRENCIES.some((item) => item.code === value);
 
 const buildCountryCurrencyIndex = (rows: CountryCurrencyRow[]) => {
   const next: Record<string, string> = {};
@@ -204,6 +207,30 @@ export const fetchExchangeRates = async (): Promise<ExchangeRates> => {
 /** Returns true only when there are no usable rates for conversion. */
 export const isExchangeRateUnavailable = (): boolean => !hasUsableRates(cachedRates);
 
+export const hasCurrencyRate = (currencyCode: string, rates: ExchangeRates): boolean => {
+  const rate = Number(rates[String(currencyCode || '').trim().toUpperCase()]);
+  return Number.isFinite(rate) && rate > 0;
+};
+
+export function convertAmountStrict(
+  amount: number,
+  fromCurrency: string,
+  toCurrency: string,
+  rates: ExchangeRates,
+): number | null {
+  if (!Number.isFinite(amount)) return null;
+
+  const fromCode = String(fromCurrency || '').trim().toUpperCase();
+  const toCode = String(toCurrency || '').trim().toUpperCase();
+  if (!fromCode || !toCode) return null;
+  if (fromCode === toCode) return amount;
+  if (!hasCurrencyRate(fromCode, rates) || !hasCurrencyRate(toCode, rates)) return null;
+
+  const inUSD = fromCode === 'USD' ? amount : amount / rates[fromCode];
+  const converted = toCode === 'USD' ? inUSD : inUSD * rates[toCode];
+  return Number.isFinite(converted) ? converted : null;
+}
+
 // ─── Synchronous conversion (uses cached rates from context) ─────────────
 
 /** Convert an amount between currencies using pre-fetched rates.
@@ -214,6 +241,10 @@ export function convertAmount(
   toCurrency: string,
   rates: ExchangeRates,
 ): number {
+  if (IS_MALDIVES_STOREFRONT) {
+    return convertAmountStrict(amount, fromCurrency, toCurrency, rates) ?? Number.NaN;
+  }
+
   if (!Number.isFinite(amount) || amount === 0) return 0;
   const fromCode = (fromCurrency || 'INR').toUpperCase().trim();
   const toCode = (toCurrency || 'INR').toUpperCase().trim();
@@ -244,16 +275,21 @@ export const convertCurrency = async (
 /** Format a price with the correct currency symbol & locale formatting.
  *  Uses Intl.NumberFormat for accurate symbol placement & decimal handling. */
 export const formatCurrency = (amount: number, currencyCode: string): string => {
+  const normalizedCurrency = String(currencyCode || '').trim().toUpperCase();
+  if (normalizedCurrency === MALDIVES_CURRENCY_CODE && !Number.isFinite(amount)) {
+    return 'MVR price unavailable';
+  }
+
   try {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(normalizedCurrency === MALDIVES_CURRENCY_CODE ? 'en-MV' : 'en-US', {
       style: 'currency',
-      currency: currencyCode,
-      minimumFractionDigits: currencyCode === 'JPY' || currencyCode === 'KRW' ? 0 : 2,
-      maximumFractionDigits: currencyCode === 'JPY' || currencyCode === 'KRW' ? 0 : 2,
+      currency: normalizedCurrency,
+      minimumFractionDigits: normalizedCurrency === 'JPY' || normalizedCurrency === 'KRW' ? 0 : 2,
+      maximumFractionDigits: normalizedCurrency === 'JPY' || normalizedCurrency === 'KRW' ? 0 : 2,
     }).format(amount);
   } catch {
     // If the currency code is invalid, fall back to plain number + code
-    return `${currencyCode} ${amount.toFixed(2)}`;
+    return `${normalizedCurrency} ${amount.toFixed(2)}`;
   }
 };
 

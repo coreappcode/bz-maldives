@@ -9,19 +9,20 @@
  *
  * - Every user-facing URL generation MUST resolve through `BASE_URL` (or the
  *   `buildAppRedirect()` helper in `utils/authEnv.ts` which is layered on
- *   top of this). This guarantees `https://bzead.com` is the only host a
- *   user ever sees, regardless of platform (web, Android, iOS).
+ *   top of this). The configured public origin is used for the active market;
+ *   the global BZEAD.COM origin remains the default outside market builds.
  *
  * - This does NOT change Capacitor's internal WebView origin or routing.
  */
 export const BASE_URL: string = (() => {
+  const fallback = import.meta.env.VITE_MARKET === 'MV' ? '' : 'https://bzead.com';
   const raw = (import.meta.env.VITE_PUBLIC_APP_URL?.trim()
     || import.meta.env.VITE_DOMAIN?.trim()
-    || 'https://bzead.com');
+    || fallback);
   try {
     return new URL(raw).origin;
   } catch {
-    return 'https://bzead.com';
+    return fallback;
   }
 })();
 

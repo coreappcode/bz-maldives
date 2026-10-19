@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { IS_MALDIVES_STOREFRONT } from '../config/market';
 import { ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { StorefrontHeader } from '../components/layout/StorefrontHeader';
@@ -356,12 +357,21 @@ export const BzeadHomePage: React.FC = () => {
           <p className="text-xl text-gray-600 mb-8">
             Join thousands of successful sellers and grow your business globally
           </p>
-          <Link
-            to="/seller"
-            className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white text-lg px-5 py-3 rounded-lg font-semibold transition-colors"
-          >
-            Get Started Now
-          </Link>
+          {IS_MALDIVES_STOREFRONT ? (
+            <a
+              href="https://www.bzead.com/seller"
+              className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white text-lg px-5 py-3 rounded-lg font-semibold transition-colors"
+            >
+              Get Started Now
+            </a>
+          ) : (
+            <Link
+              to="/seller"
+              className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white text-lg px-5 py-3 rounded-lg font-semibold transition-colors"
+            >
+              Get Started Now
+            </Link>
+          )}
         </div>
       </div>
       )}

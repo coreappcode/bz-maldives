@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { toStripeAmount, fromStripeAmount } from '../lib/stripeService';
+import { createPaymentIntent, toStripeAmount, fromStripeAmount } from '../lib/stripeService';
+
+describe('createPaymentIntent', () => {
+  it('blocks MVR before making a Stripe request', async () => {
+    await expect(createPaymentIntent({ amount: 1000, currency: 'mvr' }))
+      .rejects.toThrow('Stripe does not support MVR payments');
+  });
+});
 
 describe('toStripeAmount', () => {
   it('converts USD dollars to cents', () => {

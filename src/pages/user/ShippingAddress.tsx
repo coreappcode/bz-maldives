@@ -15,9 +15,16 @@ import {
   type DestinationCheckoutPricing,
 } from '../../lib/checkoutPricingService';
 import { fetchPublicProductPrices } from '../../lib/pricingService';
-import { formatCurrency, isExchangeRateUnavailable } from '../../utils/currency';
+import { formatCurrency, hasCurrencyRate, isExchangeRateUnavailable } from '../../utils/currency';
 import { detectLocationWithCaching } from '../../lib/locationService';
 import { fetchCountries, type Country } from '../../lib/shippingDataService';
+import {
+  IS_MALDIVES_STOREFRONT,
+  isMaldivesCountry,
+  MALDIVES_COUNTRY_CODE,
+  MALDIVES_COUNTRY_NAME,
+  MALDIVES_CURRENCY_CODE,
+} from '../../config/market';
 
 interface ShippingFormData {
   full_name: string;
@@ -59,7 +66,7 @@ const ShippingAddressPage: React.FC = () => {
     full_name: '',
     phone_number: '',
     email: '',
-    country: '',
+    country: IS_MALDIVES_STOREFRONT ? MALDIVES_COUNTRY_NAME : '',
     street_address_1: '',
     street_address_2: '',
     city: '',
@@ -92,7 +99,9 @@ const ShippingAddressPage: React.FC = () => {
     [items, selectedCartItemIds],
   );
 
-  const destinationCountryForPricing = formData.country || user?.country || '';
+  const destinationCountryForPricing = IS_MALDIVES_STOREFRONT
+    ? MALDIVES_COUNTRY_NAME
+    : formData.country || user?.country || '';
 
   useEffect(() => {
     const loadPublicPrices = async () => {
@@ -144,7 +153,15 @@ const ShippingAddressPage: React.FC = () => {
   useEffect(() => {
     const loadCountries = async () => {
       const { data } = await fetchCountries();
-      setCountryOptions(data || []);
+      const countries = data || [];
+      setCountryOptions(
+        IS_MALDIVES_STOREFRONT
+          ? countries.filter((country) =>
+              isMaldivesCountry(country.country_name)
+              || isMaldivesCountry(country.country_code)
+              || isMaldivesCountry(country.short_code))
+          : countries,
+      );
     };
 
     void loadCountries();
@@ -176,10 +193,13 @@ const ShippingAddressPage: React.FC = () => {
             delivery_notes: a.delivery_notes || '',
             is_default: a.is_default || false,
           })) as UserAddress[];
-          setSavedAddresses(addresses);
+          const supportedAddresses = IS_MALDIVES_STOREFRONT
+            ? addresses.filter((address) => isMaldivesCountry(address.country))
+            : addresses;
+          setSavedAddresses(supportedAddresses);
 
           // Auto-select default address if exists
-          const defaultAddress = addresses.find(addr => addr.is_default);
+          const defaultAddress = supportedAddresses.find(addr => addr.is_default);
           if (defaultAddress) {
             setSelectedAddressId(defaultAddress.id);
             setUseExistingAddress(true);
@@ -189,7 +209,9 @@ const ShippingAddressPage: React.FC = () => {
               full_name: defaultAddress.full_name || prev.full_name,
               phone_number: defaultAddress.phone_number || prev.phone_number,
               email: defaultAddress.email || prev.email,
-              country: defaultAddress.country || prev.country,
+              country: IS_MALDIVES_STOREFRONT
+                ? MALDIVES_COUNTRY_NAME
+                : defaultAddress.country || prev.country,
               street_address_1: defaultAddress.street_address_1 || '',
               street_address_2: defaultAddress.street_address_2 || '',
               city: defaultAddress.city || '',
@@ -265,6 +287,12 @@ const ShippingAddressPage: React.FC = () => {
           }
         } catch (err) {
           console.error('Failed to refresh checkout pricing:', err);
+          if (pricingRequestRef.current === requestId) {
+            setError(err instanceof Error
+              ? err.message
+              : 'Unable to load checkout pricing. Please refresh and try again.');
+            setPricing(null);
+          }
         } finally {
           if (pricingRequestRef.current === requestId) {
             setPricingLoading(false);
@@ -284,11 +312,18 @@ const ShippingAddressPage: React.FC = () => {
     }
   }, [pricingLoading]);
 
-  const targetCurrency = (pricing?.currency || 'INR').toUpperCase();
+  const targetCurrency = (
+    pricing?.currency || (IS_MALDIVES_STOREFRONT ? MALDIVES_CURRENCY_CODE : 'INR')
+  ).toUpperCase();
   const requiresFxConversion = Boolean(
     pricing?.items?.some((line) => String(line.sourceCurrency || '').toUpperCase() !== targetCurrency)
   );
-  const fxUnavailableForCheckout = requiresFxConversion && isExchangeRateUnavailable();
+  const fxUnavailableForCheckout = IS_MALDIVES_STOREFRONT
+    ? !hasCurrencyRate(MALDIVES_CURRENCY_CODE, rates)
+      || Boolean(pricing?.items?.some((line) =>
+        String(line.sourceCurrency || '').toUpperCase() !== MALDIVES_CURRENCY_CODE
+        && !hasCurrencyRate(line.sourceCurrency, rates)))
+    : requiresFxConversion && isExchangeRateUnavailable();
 
   const hasSelectedCountryOption = countryOptions.some((country) => country.country_name === formData.country);
 
@@ -310,7 +345,9 @@ const ShippingAddressPage: React.FC = () => {
       full_name: address.full_name || formData.full_name,
       phone_number: address.phone_number || fallbackPhone || '',
       email: address.email || fallbackEmail || '',
-      country: address.country || formData.country,
+      country: IS_MALDIVES_STOREFRONT
+        ? MALDIVES_COUNTRY_NAME
+        : address.country || formData.country,
       street_address_1: address.street_address_1 || '',
       street_address_2: address.street_address_2 || '',
       city: address.city || '',
@@ -321,6 +358,11 @@ const ShippingAddressPage: React.FC = () => {
   };
 
   const validateForm = (): boolean => {
+    if (IS_MALDIVES_STOREFRONT && !isMaldivesCountry(formData.country)) {
+      setError('BZEAD.MV shipping addresses must be in Maldives.');
+      return false;
+    }
+
     if (!formData.full_name.trim()) {
       setError('Full name is required');
       return false;
@@ -384,10 +426,17 @@ const ShippingAddressPage: React.FC = () => {
       return;
     }
 
-
+    if (!pricing) {
+      setError('Unable to calculate checkout prices and shipping. Please refresh and try again.');
+      return;
+    }
 
     if (fxUnavailableForCheckout) {
       setError('Live currency conversion is temporarily unavailable. Please try again in a moment.');
+      return;
+    }
+    if (pricing.intlShippingError || pricing.domesticShippingError) {
+      setError(pricing.intlShippingError || pricing.domesticShippingError || 'Shipping is not available for this address.');
       return;
     }
 
@@ -427,7 +476,9 @@ const ShippingAddressPage: React.FC = () => {
 
       // Store shipping address in localStorage for order summary page
       const selectedCountry = countryOptions.find((country) => country.country_name === formData.country);
-      const selectedCountryCode = String(selectedCountry?.country_code || '').trim().toUpperCase();
+      const selectedCountryCode = IS_MALDIVES_STOREFRONT
+        ? MALDIVES_COUNTRY_CODE
+        : String(selectedCountry?.country_code || '').trim().toUpperCase();
 
       const shippingData = {
         street: formData.street_address_1,
@@ -483,7 +534,9 @@ const ShippingAddressPage: React.FC = () => {
         city: data.city || prev.city,
         state: data.state || prev.state,
         postal_code: data.postalCode || prev.postal_code,
-        country: data.country || prev.country,
+        country: IS_MALDIVES_STOREFRONT
+          ? MALDIVES_COUNTRY_NAME
+          : data.country || prev.country,
       }));
     } finally {
       setLocationLoading(false);
@@ -637,15 +690,17 @@ const ShippingAddressPage: React.FC = () => {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold text-gray-900">Address Details</h3>
-                  <button
-                    type="button"
-                    onClick={() => void handleUseCurrentLocation()}
-                    disabled={locationLoading}
-                    className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50"
-                  >
-                    {locationLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
-                    Use Current Location
-                  </button>
+                  {!IS_MALDIVES_STOREFRONT && (
+                    <button
+                      type="button"
+                      onClick={() => void handleUseCurrentLocation()}
+                      disabled={locationLoading}
+                      className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50"
+                    >
+                      {locationLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
+                      Use Current Location
+                    </button>
+                  )}
                 </div>
 
                 {locationError && (
@@ -699,7 +754,7 @@ const ShippingAddressPage: React.FC = () => {
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-2">
-                        State/Province <span className="text-red-500">*</span>
+                        {IS_MALDIVES_STOREFRONT ? 'Atoll' : 'State/Province'} <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
@@ -735,17 +790,24 @@ const ShippingAddressPage: React.FC = () => {
                       value={formData.country}
                       onChange={handleInputChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                      disabled={IS_MALDIVES_STOREFRONT}
                       required
                     >
-                      <option value="">Select Country</option>
-                      {!hasSelectedCountryOption && formData.country && (
-                        <option value={formData.country}>{formData.country}</option>
+                      {IS_MALDIVES_STOREFRONT ? (
+                        <option value={MALDIVES_COUNTRY_NAME}>{MALDIVES_COUNTRY_NAME}</option>
+                      ) : (
+                        <>
+                          <option value="">Select Country</option>
+                          {!hasSelectedCountryOption && formData.country && (
+                            <option value={formData.country}>{formData.country}</option>
+                          )}
+                          {countryOptions.map((country) => (
+                            <option key={country.id} value={country.country_name}>
+                              {country.country_name}
+                            </option>
+                          ))}
+                        </>
                       )}
-                      {countryOptions.map((country) => (
-                        <option key={country.id} value={country.country_name}>
-                          {country.country_name}
-                        </option>
-                      ))}
                     </select>
                   </div>
                 </div>
@@ -850,12 +912,12 @@ const ShippingAddressPage: React.FC = () => {
             <div className="space-y-1.5 sm:space-y-2 mb-2 sm:mb-3">
               <div className="flex justify-between text-[13px] sm:text-[14px]">
                 <span className="text-[#555]">Items ({activeCartItems.length})</span>
-                <span>{formatCurrency(pricing?.subtotal || 0, pricing?.currency || 'INR')}</span>
+                <span>{formatCurrency(pricing ? pricing.subtotal : Number.NaN, targetCurrency)}</span>
               </div>
               {(pricing?.offerDiscount || 0) > 0 && (
                 <div className="flex justify-between text-[13px] sm:text-[14px] text-[#067d62] font-semibold">
                   <span>Savings</span>
-                  <span>-{formatCurrency(pricing?.offerDiscount || 0, pricing?.currency || 'INR')}</span>
+                  <span>-{formatCurrency(pricing?.offerDiscount || 0, targetCurrency)}</span>
                 </div>
               )}
               <div className="flex justify-between text-[13px] sm:text-[14px]">
@@ -863,7 +925,7 @@ const ShippingAddressPage: React.FC = () => {
                 <span className="text-[#067d62] font-semibold">
                   {(!pricing || pricingLoading)
                     ? <span className="inline-block animate-pulse text-gray-400 text-xs">Calculating...</span>
-                    : (pricing.shipping || 0) === 0 ? 'FREE' : formatCurrency(pricing.shipping || 0, pricing.currency || 'INR')}
+                    : (pricing.shipping || 0) === 0 ? 'FREE' : formatCurrency(pricing.shipping || 0, targetCurrency)}
                 </span>
               </div>
               {pricingLoading && (
@@ -873,7 +935,7 @@ const ShippingAddressPage: React.FC = () => {
 
             <div className="border-t-2 border-[#ddd] pt-2 sm:pt-3 mt-2 sm:mt-3 flex justify-between text-[15px] sm:text-[18px] font-bold text-[#b12704]">
               <span>Order Total</span>
-              <span>{formatCurrency(pricing?.total || 0, pricing?.currency || 'INR')}</span>
+              <span>{formatCurrency(pricing ? pricing.total : Number.NaN, targetCurrency)}</span>
             </div>
 
             <div className="flex items-center justify-center gap-1.5 text-[11px] sm:text-[12px] text-[#067d62] mt-2 sm:mt-3">

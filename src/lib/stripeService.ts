@@ -77,6 +77,10 @@ const extractFunctionErrorMessage = async (error: any): Promise<string> => {
 export async function createPaymentIntent(
   params: CreatePaymentIntentParams
 ): Promise<PaymentIntentResult> {
+  if (params.currency.trim().toUpperCase() === 'MVR') {
+    throw new Error('Stripe does not support MVR payments. No payment was attempted.');
+  }
+
   // Tag the request so the edge function can disable redirect-based payment methods
   // when called from inside the Capacitor WebView (where Stripe's off-site redirect
   // would land on https://localhost and never return to the app).
