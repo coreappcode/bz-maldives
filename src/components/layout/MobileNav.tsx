@@ -10,13 +10,11 @@ import {
   unsubscribeFromNotifications,
 } from '../../lib/notificationService';
 
-// Skip rendering entirely in the seller Android app — SellerLayout owns
-// its own bottom navigation, so this buyer-only nav would double-stack.
-const isSellerApp = import.meta.env.VITE_APP_MODE === 'seller';
+export const MobileNav: React.FC = () => (
+  isNativePlatform ? <BuyerMobileNav /> : null
+);
 
-export const MobileNav: React.FC = () => {
-  // Buyer Android app only — never render in the web app, regardless of viewport.
-  if (!isNativePlatform || isSellerApp) return null;
+const BuyerMobileNav: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();

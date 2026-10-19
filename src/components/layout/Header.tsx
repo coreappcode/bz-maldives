@@ -13,7 +13,6 @@ import { useAppNavigation } from '../../App';
 import { isNativePlatform } from '../../mobile/nativePlatform';
 import { openExternalUrl } from '../../mobile/externalLinks';
 import { IS_MALDIVES_STOREFRONT } from '../../config/market';
-import { withBase } from '../../config/baseUrl';
 
 export interface HeaderDetectedLocation {
   city: ResolvedLocation['city'];
@@ -263,20 +262,17 @@ export const Header: React.FC<HeaderProps> = ({
     setShowSellerConfirm(false);
     // Open the seller portal in a Chrome Custom Tab on native (via
     // @capacitor/browser) because the buyer app build excludes seller routes.
-    void openExternalUrl(
-      IS_MALDIVES_STOREFRONT ? 'https://www.bzead.com/seller' : withBase('/seller'),
-    );
+    void openExternalUrl('https://www.bzead.com/seller');
   };
 
   const handleSignOutConfirm = async () => {
     setIsLoggingOut(true);
     try {
-      const roleBeforeSignout = await signOut();
+      await signOut();
       setShowProfileDropdown(false);
       setShowMobileMenu(false);
       setShowLogoutDialog(false);
-      const dest = (roleBeforeSignout === 'admin' || roleBeforeSignout === 'seller') ? '/seller' : '/';
-      startNavigation(() => navigate(dest));
+      startNavigation(() => navigate('/'));
     } catch (error) {
       logger.error(error as Error, { context: 'Logout error' });
     } finally {
@@ -295,20 +291,14 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const getProfilePath = () => {
-    if (authRole === 'seller') return '/seller/profile';
-    if (authRole === 'admin') return '/admin/profile';
     return '/profile';
   };
 
   const getOrdersPath = () => {
-    if (authRole === 'seller') return '/seller/orders';
-    if (authRole === 'admin') return '/admin/orders';
     return '/orders';
   };
 
   const getSettingsPath = () => {
-    if (authRole === 'admin') return '/admin/settings';
-    if (authRole === 'seller') return '/seller/profile';
     return '/settings';
   };
 
@@ -376,23 +366,13 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             {/* Become a Seller Button */}
-            {IS_MALDIVES_STOREFRONT ? (
-              <a
-                href="https://www.bzead.com/seller"
-                onClick={handleBecomeSellerClick}
-                className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
-              >
-                Become a Seller
-              </a>
-            ) : (
-              <Link
-                to="/seller"
-                onClick={handleBecomeSellerClick}
-                className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
-              >
-                Become a Seller
-              </Link>
-            )}
+            <a
+              href="https://www.bzead.com/seller"
+              onClick={handleBecomeSellerClick}
+              className="text-sm font-medium text-white hover:text-amber-300 transition-all duration-300"
+            >
+              Become a Seller
+            </a>
 
             {/* Wishlist */}
             <button
@@ -769,39 +749,21 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             <div className="mobile-menu-links">
-              {IS_MALDIVES_STOREFRONT ? (
-                <a
-                  href="https://www.bzead.com/seller"
-                  className="mobile-menu-link-row"
-                  onClick={(e) => {
-                    if (isNativePlatform) {
-                      handleBecomeSellerClick(e);
-                    } else {
-                      setShowMobileMenu(false);
-                    }
-                  }}
-                >
-                  <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
-                  <span className="flex-1">Become a Seller</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
-                </a>
-              ) : (
-                <Link
-                  to="/seller"
-                  className="mobile-menu-link-row"
-                  onClick={(e) => {
-                    if (isNativePlatform) {
-                      handleBecomeSellerClick(e);
-                    } else {
-                      setShowMobileMenu(false);
-                    }
-                  }}
-                >
-                  <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
-                  <span className="flex-1">Become a Seller</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
-                </Link>
-              )}
+              <a
+                href="https://www.bzead.com/seller"
+                className="mobile-menu-link-row"
+                onClick={(e) => {
+                  if (isNativePlatform) {
+                    handleBecomeSellerClick(e);
+                  } else {
+                    setShowMobileMenu(false);
+                  }
+                }}
+              >
+                <Store className="h-4 w-4 shrink-0 text-[#D4AF37]" />
+                <span className="flex-1">Become a Seller</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
+              </a>
               <Link
                 to="/contact"
                 className="mobile-menu-link-row"

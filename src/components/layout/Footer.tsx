@@ -4,7 +4,6 @@ import { Facebook, Instagram, Mail, Phone, MapPin, Loader2 } from 'lucide-react'
 import { isNativePlatform } from '../../mobile/nativePlatform';
 import { COMPANY_ADDRESS_LINES } from '../../constants/companyContact';
 import { BUYER_APP_PLAY_STORE_URL } from '../../lib/appDownload';
-import { IS_MALDIVES_STOREFRONT } from '../../config/market';
 
 export const Footer: React.FC = () => {
   // The native (Capacitor) app shell has its own bottom nav and does not
@@ -112,15 +111,9 @@ const FooterImpl: React.FC = () => {
             <h4 className="text-amber-400 font-semibold mb-4">Business</h4>
             <ul className="space-y-2">
               <li>
-                {IS_MALDIVES_STOREFRONT ? (
-                  <a href="https://www.bzead.com/seller" className="text-white hover:text-amber-400 transition-colors text-sm">
-                    Become a Seller
-                  </a>
-                ) : (
-                  <Link to="/seller/signup" className="text-white hover:text-amber-400 transition-colors text-sm">
-                    Become a Seller
-                  </Link>
-                )}
+                <a href="https://www.bzead.com/seller" className="text-white hover:text-amber-400 transition-colors text-sm">
+                  Become a Seller
+                </a>
               </li>
 
               <li>

@@ -12,7 +12,7 @@ import { AuthCardHeader } from './AuthCardHeader';
 import { BuyerAuthLayout } from './BuyerAuthLayout';
 
 interface SignupProps {
-  role?: 'user' | 'seller';
+  role?: 'user';
 }
 
 interface Country {
@@ -36,8 +36,8 @@ export const Signup: React.FC<SignupProps> = ({ role = 'user' }) => {
   const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
   const { signUp } = useAuth();
   const navigate = useNavigate();
-  const otpPurpose = role === 'seller' ? 'seller-signup' : 'signup';
-  const otpPath = role === 'seller' ? '/seller/otp-verification' : '/otp-verification';
+  const otpPurpose = 'signup';
+  const otpPath = '/otp-verification';
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const goToOtp = (targetEmail: string, opts?: { fullName?: string; countryId?: string }) => {
@@ -178,7 +178,6 @@ export const Signup: React.FC<SignupProps> = ({ role = 'user' }) => {
   };
 
   const getLoginLink = () => {
-    if (role === 'seller') return '/seller/login';
     return '/login';
   };
 

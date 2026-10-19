@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 
-const isSellerApp = import.meta.env.VITE_APP_MODE === 'seller';
 // Loader script is injected in index.html with this publisher id. Keep in sync.
 const ADSENSE_CLIENT =
   (import.meta.env.VITE_ADSENSE_CLIENT as string | undefined)?.trim() ||
@@ -25,7 +24,7 @@ export const AdSenseSlot: React.FC<Props> = ({
   const pushed = useRef(false);
 
   useEffect(() => {
-    if (!slot || isSellerApp) return;
+    if (!slot) return;
     if (pushed.current) return;
     try {
       // @ts-expect-error adsbygoogle is injected by the static loader script
@@ -36,7 +35,7 @@ export const AdSenseSlot: React.FC<Props> = ({
     }
   }, [slot]);
 
-  if (!slot || isSellerApp) return null;
+  if (!slot) return null;
 
   return (
     <ins

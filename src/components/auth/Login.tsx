@@ -26,13 +26,7 @@ export const Login: React.FC<LoginProps> = ({ role = 'user' }) => {
 
   // Redirect already-logged-in users away from login page
   useEffect(() => {
-    if (authRole === 'user') {
-      navigate('/', { replace: true });
-    } else if (authRole === 'seller') {
-      navigate('/seller/dashboard', { replace: true });
-    } else if (authRole === 'admin') {
-      navigate('/admin', { replace: true });
-    }
+    if (authRole) navigate('/', { replace: true });
   }, [authRole, navigate]);
 
   // Check for success message from password reset
@@ -122,18 +116,20 @@ export const Login: React.FC<LoginProps> = ({ role = 'user' }) => {
               Buyer access is restricted to accounts registered as buyers.
             </p>
             <p className="text-sm text-gray-600 mt-3 leading-relaxed">
-              Please log in through the <span className="font-semibold">Seller Login</span> page using this email address.
+              This storefront supports buyer accounts only. Use the appropriate portal for this account.
             </p>
             <p className="text-sm text-gray-500 mt-3 leading-relaxed">
               If you intend to shop on our platform, you will need to register for a Buyer account.
             </p>
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Link
-                to="/seller/login"
-                className="w-full rounded-lg bg-blue-600 text-white py-2.5 text-sm font-semibold text-center hover:bg-blue-700 transition-colors"
-              >
-                Go to Seller Login
-              </Link>
+              {wrongRolePopup === 'seller' && (
+                <a
+                  href="https://www.bzead.com/seller"
+                  className="w-full rounded-lg bg-blue-600 text-white py-2.5 text-sm font-semibold text-center hover:bg-blue-700 transition-colors"
+                >
+                  Open Seller Portal
+                </a>
+              )}
               <button
                 onClick={() => setWrongRolePopup(null)}
                 className="w-full rounded-lg border border-gray-300 text-gray-700 py-2.5 text-sm font-semibold hover:bg-gray-50 transition-colors"

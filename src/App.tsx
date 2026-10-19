@@ -19,15 +19,6 @@ import { openExternalUrl } from './mobile/externalLinks';
 import { BzeadHomePage } from './pages/BzeadHomePage';
 import { FloatingCartShortcut } from './components/layout/FloatingCartShortcut';
 
-// ── Buyer-app / Seller-app mode guards ──────────────────────────────────
-// When built with VITE_APP_MODE=buyer, seller/admin routes and their lazy
-// chunks are excluded entirely. When VITE_APP_MODE=seller, the seller +
-// admin surfaces are primary and buyer-only heavy chunks (cart, checkout,
-// product details, wishlist, home page, etc.) are stubbed out.
-// The main web build is unaffected (env var is undefined → both flags false).
-const isBuyerApp = import.meta.env.VITE_APP_MODE === 'buyer';
-const isSellerApp = import.meta.env.VITE_APP_MODE === 'seller';
-
 // ── Navigation loading context ─────────────────────────────────────────
 // Exposes startNavigation (wraps navigate in startTransition) so React 19
 // keeps showing the current page while the lazy chunk loads, and isPending
@@ -78,85 +69,30 @@ function lazyRetry<T extends { default: React.ComponentType<any> }>(
 // ── Lazy-loaded page components (code-splitting) ──────────────────────
 // Named-only exports use .then() wrapper; default exports load directly.
 
-// Stubs for dead-code elimination across both single-purpose app builds.
-// When `isBuyerApp` is `true` (VITE_APP_MODE=buyer), the dynamic `import()`
-// branches below become statically unreachable and Rollup drops the chunks.
-// `sellerStub` is the symmetric stub for seller-app mode (buyer-only chunks).
-const buyerStub = () =>
-  Promise.resolve({ default: (() => null) as unknown as React.ComponentType<any> });
-const sellerStub = buyerStub;
-
 // Auth
-const Login = lazyRetry(isSellerApp ? sellerStub : () => import('./components/auth/Login').then(m => ({ default: m.Login })));
-const Signup = lazyRetry(isSellerApp ? sellerStub : () => import('./components/auth/Signup').then(m => ({ default: m.Signup })));
+const Login = lazyRetry(() => import('./components/auth/Login').then(m => ({ default: m.Login })));
+const Signup = lazyRetry(() => import('./components/auth/Signup').then(m => ({ default: m.Signup })));
 
 // User pages
-const MyOrders = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/MyOrders').then(m => ({ default: m.MyOrders })));
-const NotificationsPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Notifications'));
-const WishlistPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Wishlist').then(m => ({ default: m.WishlistPage })));
-const CartPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Cart').then(m => ({ default: m.CartPage })));
-const UserSettings = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Settings').then(m => ({ default: m.UserSettings })));
-const ForgotPassword = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/ForgotPassword'));
-const Profile = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Profile'));
-const OrderDetails = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/OrderDetails'));
-const WriteReview = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/WriteReview'));
-const UserAddressManagement = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/AddressManagement'));
-const Checkout = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/Checkout'));
-const ShippingAddressPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/ShippingAddress'));
-const OrderSummaryPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/OrderSummary'));
-const OrderConfirmationPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/user/OrderConfirmation'));
-
-// Seller pages — buyer build drops these via the `isBuyerApp` short-circuit.
-
-const SellerDashboardWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerDashboardWrapper').then(m => ({ default: m.SellerDashboardWrapper })));
-const SellerLanding = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerLanding').then(m => ({ default: m.SellerLanding })));
-// Native-only welcome screen for the seller Android app (logo + Get Started).
-// Loaded only in the seller-app bundle; web build skips the chunk entirely.
-const SellerNativeLanding = lazyRetry(!isSellerApp ? buyerStub : () => import('./pages/seller/SellerNativeLanding').then(m => ({ default: m.SellerNativeLanding })));
-const SellerSignup = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerSignup'));
-const SellerLogin = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerLogin'));
-const SellerForgotPassword = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerForgotPassword'));
-const SellerProductListingWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerProductListingWrapper'));
-const SellerOrderManagementWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerOrderManagementWrapper'));
-const SellerWalletWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerWalletWrapper'));
-const SellerVerificationWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerVerificationWrapper'));
-const SellerNotificationsWrapper = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerNotificationsWrapper'));
-const SellerTutorial = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerTutorial'));
-const SellerHelp = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerHelp'));
-const SellerLayout = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/SellerLayout'));
-const WarehouseCreation = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/seller/WarehouseCreation'));
-
-// Admin pages — same dead-code-elimination pattern.
-const AdminLayout = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/AdminLayout'));
-const AdminOverview = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/AdminOverview'));
-const SellerManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SellerManagement'));
-const ProductManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ProductManagement').then(m => ({ default: m.ProductManagement })));
-const OrderManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/OrderManagement'));
-
-const ComplaintManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ComplaintManagement'));
-const AccountsManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/AccountsManagement'));
-const ReportsManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ReportsManagement'));
-const AdminManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/AdminManagement'));
-const ProfilePage = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ProfilePage'));
-const SettingsPage = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SettingsPage'));
-const AdminNotificationsPage = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/NotificationsPage'));
-const SellerKYCSubmissionManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SellerKYCSubmissionManagement').then(m => ({ default: m.SellerKYCSubmissionManagement })));
-const ProductVariantManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ProductVariantManagement'));
-const SponsoredProductsManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SponsoredProductsManagement'));
-const BannerManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/BannerManagement'));
-const SearchManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SearchManagement'));
-const AuditLogs = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/AuditLogs'));
-const SystemHealth = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/SystemHealth'));
-const AdminAddressManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/components/AdminAddressManagement'));
-const ShippingManagementPage = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/ShippingManagementPage'));
-const CategoryManagement = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/CategoryManagement'));
-const AdminSellerWarehouses = lazyRetry(isBuyerApp ? buyerStub : () => import('./pages/admin/modules/AdminSellerWarehouses'));
-
+const MyOrders = lazyRetry(() => import('./pages/user/MyOrders').then(m => ({ default: m.MyOrders })));
+const NotificationsPage = lazyRetry(() => import('./pages/user/Notifications'));
+const WishlistPage = lazyRetry(() => import('./pages/user/Wishlist').then(m => ({ default: m.WishlistPage })));
+const CartPage = lazyRetry(() => import('./pages/user/Cart').then(m => ({ default: m.CartPage })));
+const UserSettings = lazyRetry(() => import('./pages/user/Settings').then(m => ({ default: m.UserSettings })));
+const ForgotPassword = lazyRetry(() => import('./pages/user/ForgotPassword'));
+const Profile = lazyRetry(() => import('./pages/user/Profile'));
+const OrderDetails = lazyRetry(() => import('./pages/user/OrderDetails'));
+const WriteReview = lazyRetry(() => import('./pages/user/WriteReview'));
+const UserAddressManagement = lazyRetry(() => import('./pages/user/AddressManagement'));
+const Checkout = lazyRetry(() => import('./pages/user/Checkout'));
+const ShippingAddressPage = lazyRetry(() => import('./pages/user/ShippingAddress'));
+const OrderSummaryPage = lazyRetry(() => import('./pages/user/OrderSummary'));
+const OrderConfirmationPage = lazyRetry(() => import('./pages/user/OrderConfirmation'));
 
 // Public pages
-const ProductDetailsPage = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/ProductDetailsPage'));
-const CategoryProducts = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/CategoryProducts').then(m => ({ default: m.CategoryProducts })));
-const SectionProducts = lazyRetry(isSellerApp ? sellerStub : () => import('./pages/SectionProducts').then(m => ({ default: m.SectionProducts })));
+const ProductDetailsPage = lazyRetry(() => import('./pages/ProductDetailsPage'));
+const CategoryProducts = lazyRetry(() => import('./pages/CategoryProducts').then(m => ({ default: m.CategoryProducts })));
+const SectionProducts = lazyRetry(() => import('./pages/SectionProducts').then(m => ({ default: m.SectionProducts })));
 const PrivacyPolicy = lazyRetry(() => import('./pages/PrivacyPolicy'));
 const TermsService = lazyRetry(() => import('./pages/TermsService'));
 const ShippingPolicy = lazyRetry(() => import('./pages/ShippingPolicy'));
@@ -253,32 +189,20 @@ const NativeRuntimeGuard: React.FC<{ children: (refreshEpoch: number) => React.R
 /** Root deep-link entrypoint used by share redirects (/?product=<slug>) */
 const RootEntry: React.FC = () => {
   const location = useLocation();
-  const { authRole } = useAuth();
   const productRef = new URLSearchParams(location.search).get('product')?.trim();
 
   if (productRef) {
     return <Navigate to={`/products/${encodeURIComponent(productRef)}`} replace />;
   }
 
-  // Seller-app shell: there is no public storefront. Route by role.
-  if (isSellerApp) {
-    if (authRole === 'admin') return <Navigate to="/admin" replace />;
-    if (authRole === 'seller') return <Navigate to="/seller/dashboard" replace />;
-    // Unauthenticated guests land on the native welcome screen first;
-    // tapping "Get Started" there navigates to /seller/login.
-    return <Navigate to="/seller/welcome" replace />;
-  }
-
   return <BzeadHomePage />;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// RouteGuard — strict role-based access control
+// RouteGuard — buyer storefront access control
 //
 // Guest:  Public pages only. Cart/wishlist/checkout → redirect to /login.
-// User:   Public + user pages. Cannot access seller/admin dashboards.
-// Seller: ONLY /seller/* protected pages. Everything else → /seller/dashboard.
-// Admin:  ONLY /admin/* pages. Everything else → /admin.
+// User:   Public + user pages.
 // ═══════════════════════════════════════════════════════════════════════
 const RouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { authRole, loading } = useAuth();
@@ -303,19 +227,11 @@ const RouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   useEffect(() => {
     if (effectiveLoading) return;
 
-    // ── Auth flow pages — ALWAYS accessible regardless of role ──
-    // Password reset creates a session mid-flow (via verifyOtp), so these
-    // must remain accessible even when the user briefly has a role.
-    const authFlowPages = [
-      '/otp-verification', '/seller/otp-verification',
-      '/new-password', '/seller/new-password',
-      '/forgot-password', '/seller/forgot-password',
-    ];
+    const authFlowPages = ['/otp-verification', '/new-password', '/forgot-password'];
     if (authFlowPages.includes(path)) return;
 
-    // ── Route categories ──
     const publicPages = [
-      '/', '/seller',
+      '/',
       '/privacy-policy', '/terms-of-service', '/shipping-policy',
       '/refund-policy', '/terms-and-conditions', '/about', '/contact',
     ];
@@ -325,19 +241,8 @@ const RouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       publicPrefixes.some((p) => path === p || path.startsWith(`${p}/`));
 
     const userAuthPages = ['/login', '/signup'];
-    const sellerAuthPages = ['/seller/login', '/seller/signup'];
     const isUserAuthPage = userAuthPages.includes(path);
-    const isSellerAuthPage = sellerAuthPages.includes(path);
-
-    const sellerProtectedPrefixes = [
-      '/seller/dashboard', '/seller/products', '/seller/orders',
-      '/seller/wallet', '/seller/verify', '/seller/notifications',
-      '/seller/warehouse', '/seller/tutorial', '/seller/help',
-    ];
-    const isSellerProtectedPage = sellerProtectedPrefixes.some(
-      (p) => path === p || path.startsWith(`${p}/`)
-    );
-    const isAdminPage = path.startsWith('/admin');
+    const isSellerPortalRedirect = path === '/seller' || path.startsWith('/seller/');
     const userProtectedPrefixes = [
       '/orders', '/profile', '/wishlist', '/cart', '/checkout',
       '/settings', '/notifications', '/user',
@@ -346,30 +251,16 @@ const RouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       (p) => path === p || path.startsWith(`${p}/`)
     );
 
-    // ═══ ADMIN — locked to /admin/* only ═══
-    if (authRole === 'admin') {
-      if (!isAdminPage) {
-        navigate('/admin', { replace: true });
-      }
-      return;
-    }
-
-    // ═══ SELLER — locked to seller protected pages only ═══
-    if (authRole === 'seller') {
-      if (!isSellerProtectedPage) {
-        navigate('/seller/dashboard', { replace: true });
-      }
-      return;
-    }
-
-    // ═══ USER — public + user pages, blocked from seller/admin ═══
-    if (authRole === 'user') {
-      if (isSellerProtectedPage || isAdminPage) {
+    if (authRole === 'admin' || authRole === 'seller') {
+      if (isSellerPortalRedirect) return;
+      if (path !== '/') {
         navigate('/', { replace: true });
-        return;
       }
-      // Seller auth pages — let SellerAuthRouteGuard show the "switch account" modal
-      if (isSellerAuthPage) return;
+      return;
+    }
+
+    if (authRole === 'user') {
+      if (isSellerPortalRedirect) return;
       // Already logged in — redirect away from user login/signup
       if (isUserAuthPage) {
         navigate('/', { replace: true });
@@ -379,17 +270,10 @@ const RouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       return;
     }
 
-    // ═══ GUEST — public + auth pages only ═══
-    if (isPublicPage || isUserAuthPage || isSellerAuthPage) return;
+    if (isPublicPage || isUserAuthPage || isSellerPortalRedirect) return;
 
-    // Guest trying to access protected pages → redirect to appropriate login
     if (isUserProtectedPage) {
       navigate('/login', { replace: true, state: { from: path } });
-      return;
-    }
-    if (isSellerProtectedPage || isAdminPage) {
-      navigate('/seller/login', { replace: true });
-      return;
     }
     // Unknown path — let NotFound component handle it
   }, [authRole, path, effectiveLoading, navigate]);
@@ -420,66 +304,6 @@ const CartAutoSync: React.FC = () => {
   return null;
 };
 
-// SellerAuthRouteGuard — blocks "user" role from seller auth pages.
-// Guest / seller / admin → render children normally.
-// User → show "Account Switch Required" modal.
-const SellerAuthRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { authRole, loading, signOut } = useAuth();
-  const navigate = useNavigate();
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-
-  const handleLogout = async () => {
-    setIsLoggingOut(true);
-    try {
-      await signOut();
-      navigate('/seller/login', { replace: true });
-    } finally {
-      setIsLoggingOut(false);
-    }
-  };
-
-  const handleCancel = () => {
-    navigate('/', { replace: true });
-  };
-
-  if (loading) return <PageLoader />;
-
-  // Guest, seller, or admin — allow through
-  if (!authRole || authRole === 'seller' || authRole === 'admin') {
-    return <>{children}</>;
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" />
-      <div className="relative z-10 w-full max-w-md rounded-2xl bg-white p-5 sm:p-6 shadow-2xl border border-gray-200">
-        <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Account Switch Required</h2>
-        <p className="mt-2 text-sm sm:text-base text-gray-600">
-          Please log out of your customer account before continuing to seller authentication.
-        </p>
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={handleLogout}
-            disabled={isLoggingOut}
-            className="w-full rounded-lg bg-red-600 text-white py-2.5 font-semibold hover:bg-red-700 transition-colors disabled:opacity-60"
-          >
-            {isLoggingOut ? 'Logging out...' : 'Logout'}
-          </button>
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={isLoggingOut}
-            className="w-full rounded-lg bg-blue-600 text-white py-2.5 font-semibold hover:bg-blue-700 transition-colors disabled:opacity-60"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 function App() {
   const isOnline = useOnlineStatus();
 
@@ -499,7 +323,7 @@ function App() {
                   <CartAutoSync />
                   <NavigationProgress />
                   <GlobalActionConfirmation />
-                  {!isSellerApp && <FloatingCartShortcut />}
+                  <FloatingCartShortcut />
                   <NativeRuntimeGuard>
                     {(refreshEpoch) => (
                       <RouteGuard key={refreshEpoch}>
@@ -547,101 +371,8 @@ function App() {
                   <Route path="/checkout/payment" element={<Checkout />} />
                   <Route path="/checkout/confirmation" element={<OrderConfirmationPage />} />
                   
-                  {/* Seller Routes */}
-                  {isBuyerApp ? (
-                    // In the buyer app, all /seller/* paths open the full web app externally
-                    <>
-                      <Route path="/seller" element={<ExternalSellerRedirect />} />
-                      <Route path="/seller/*" element={<ExternalSellerRedirect />} />
-                    </>
-                  ) : (
-                    // Full web / full Android app — all seller routes available
-                    <>
-                  <Route path="/seller" element={<SellerLanding />} />
-                  {isSellerApp && (
-                    <Route path="/seller/welcome" element={<SellerNativeLanding />} />
-                  )}
-                  <Route
-                    path="/seller/login"
-                    element={
-                      <SellerAuthRouteGuard>
-                        <SellerLogin />
-                      </SellerAuthRouteGuard>
-                    }
-                  />
-                  <Route
-                    path="/seller/signup"
-                    element={
-                      <SellerAuthRouteGuard>
-                        <SellerSignup />
-                      </SellerAuthRouteGuard>
-                    }
-                  />
-                  <Route path="/seller/otp-verification" element={<OTPVerification />} />
-                  <Route path="/seller/new-password" element={<NewPassword />} />
-                  <Route
-                    path="/seller/forgot-password"
-                    element={
-                      <SellerAuthRouteGuard>
-                        <SellerForgotPassword />
-                      </SellerAuthRouteGuard>
-                    }
-                  />
-                  <Route path="/seller/analytics" element={<Navigate to="/seller/dashboard" replace />} />
-                  <Route path="/seller/profile" element={<Navigate to="/seller/dashboard" replace />} />
-                  <Route path="/seller/dashboard" element={<SellerDashboardWrapper />} />
-                  <Route path="/seller/products" element={<SellerProductListingWrapper />} />
-                  <Route path="/seller/products/new/:step" element={<SellerProductListingWrapper />} />
-                  <Route path="/seller/warehouse" element={<SellerLayout><WarehouseCreation /></SellerLayout>} />
-                  <Route path="/seller/products/pickup-location" element={<Navigate to="/seller/warehouse" replace />} />
-                  <Route path="/seller/orders" element={<SellerOrderManagementWrapper />} />
-                  <Route path="/seller/wallet" element={<SellerWalletWrapper />} />
-                  <Route path="/seller/verify" element={<SellerLayout><SellerVerificationWrapper /></SellerLayout>} />
-                  <Route path="/seller/promotions" element={<Navigate to="/seller/dashboard" replace />} />
-                  <Route path="/seller/notifications" element={<SellerNotificationsWrapper />} />
-                  <Route path="/seller/tutorial" element={<SellerLayout><SellerTutorial /></SellerLayout>} />
-                  <Route path="/seller/help" element={<SellerLayout><SellerHelp /></SellerLayout>} />
-                    </>
-                  )}
-                  
-                  {/* Admin Routes — excluded from buyer app */}
-                  {!isBuyerApp && (
-                    <>
-                  {/* Admin Routes — admin login only via seller login page */}
-                  <Route path="/admin/login" element={<Navigate to="/seller/login" replace />} />
-                  <Route path="/admin/signup" element={<Navigate to="/seller/login" replace />} />
-                  <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
-                  
-                  {/* Admin Layout Routes */}
-                  <Route element={<AdminLayout />}>
-                    <Route path="/admin" element={<AdminOverview />} />
-                    <Route path="/admin/sellers" element={<SellerManagement />} />
-                    <Route path="/admin/products" element={<ProductManagement />} />
-                    <Route path="/admin/sponsored-products" element={<SponsoredProductsManagement />} />
-                    <Route path="/admin/variants" element={<ProductVariantManagement />} />
-                    <Route path="/admin/orders" element={<OrderManagement />} />
-
-                    <Route path="/admin/complaints" element={<ComplaintManagement />} />
-                    <Route path="/admin/accounts" element={<AccountsManagement />} />
-                    <Route path="/admin/reports" element={<ReportsManagement />} />
-                    <Route path="/admin/admins" element={<AdminManagement />} />
-                    <Route path="/admin/profile" element={<ProfilePage />} />
-                    <Route path="/admin/settings" element={<SettingsPage />} />
-                    <Route path="/admin/notifications" element={<AdminNotificationsPage />} />
-                    <Route path="/admin/search" element={<SearchManagement />} />
-                    <Route path="/admin/audit-logs" element={<AuditLogs />} />
-                    <Route path="/admin/health" element={<SystemHealth />} />
-                    <Route path="/admin/addresses" element={<AdminAddressManagement />} />
-                    <Route path="/admin/seller-kyc" element={<SellerKYCSubmissionManagement />} />
-                    <Route path="/admin/shipping-management" element={<ShippingManagementPage />} />
-                    <Route path="/admin/intl-rates" element={<ShippingManagementPage />} />
-                    <Route path="/admin/banners" element={<BannerManagement />} />
-                    <Route path="/admin/categories" element={<CategoryManagement />} />
-                    <Route path="/admin/seller-warehouses" element={<AdminSellerWarehouses />} />
-
-                  </Route>
-                    </>
-                  )}
+                  <Route path="/seller" element={<ExternalSellerRedirect />} />
+                  <Route path="/seller/*" element={<ExternalSellerRedirect />} />
                   
                   {/* 404 */}
                   <Route path="*" element={<NotFound />} />

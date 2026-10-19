@@ -1,4 +1,7 @@
 version: 1
+env:
+  variables:
+    VITE_PUBLIC_APP_URL: 'https://main.dodpm249jwwgd.amplifyapp.com'
 frontend:
   phases:
     preBuild:

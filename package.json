@@ -4,10 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "cross-env VITE_APP_MODE=buyer VITE_MARKET=MV vite",
+    "dev": "cross-env VITE_MARKET=MV vite",
     "build": "npm run build:buyer",
-    "build:buyer": "tsc -b && cross-env VITE_APP_MODE=buyer VITE_MARKET=MV vite build --outDir dist-buyer --emptyOutDir && node scripts/generate-share-pages.mjs --buyer",
-    "build:seller": "tsc -b && cross-env VITE_APP_MODE=seller vite build --outDir dist-seller --emptyOutDir",
+    "build:buyer": "tsc -b && cross-env VITE_MARKET=MV vite build --outDir dist-buyer --emptyOutDir && node scripts/generate-share-pages.mjs --buyer",
     "build:share-pages": "node scripts/generate-share-pages.mjs",
     "generate:bulk-template": "node scripts/generate-bulk-product-template.mjs",
     "lint": "eslint .",
