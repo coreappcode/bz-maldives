@@ -11,7 +11,7 @@ const ABOUT_POINT_COUNT = 10;
 const SPEC_PAIR_COUNT = 6;
 
 async function loadLocalEnv() {
-  if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY) return;
+  if (process.env.VITE_SUPABASE_URL && getSupabasePublicKey()) return;
   try {
     const raw = await readFile(path.resolve(process.cwd(), '.env'), 'utf8');
     for (const line of raw.split(/\r?\n/)) {
@@ -28,9 +28,15 @@ async function loadLocalEnv() {
   }
 }
 
+function getSupabasePublicKey() {
+  return process.env.SUPABASE_PUBLISHABLE_KEY
+    || process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+    || process.env.VITE_SUPABASE_ANON_KEY;
+}
+
 async function fetchCategories() {
   const url = process.env.VITE_SUPABASE_URL;
-  const key = process.env.VITE_SUPABASE_ANON_KEY;
+  const key = getSupabasePublicKey();
   if (!url || !key) return [];
 
   const res = await fetch(

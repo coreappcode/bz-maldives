@@ -155,7 +155,12 @@ async function main() {
   await loadLocalEnvIfNeeded();
 
   SUPABASE_URL = String(process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  SUPABASE_ANON_KEY = String(process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  SUPABASE_ANON_KEY = String(
+    process.env.SUPABASE_PUBLISHABLE_KEY
+    || process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+    || process.env.VITE_SUPABASE_ANON_KEY
+    || '',
+  ).trim();
   isBuyerBuild = process.argv.includes('--buyer');
   if (isBuyerBuild && !String(process.env.VITE_PUBLIC_APP_URL || '').trim()) {
     throw new Error('VITE_PUBLIC_APP_URL must be set to the BZEAD.MV public origin for the buyer build.');
@@ -167,7 +172,7 @@ async function main() {
   SHARE_DIR = path.join(DIST_DIR, 'share');
 
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.warn('[share-pages] Skipped: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+    console.warn('[share-pages] Skipped: missing VITE_SUPABASE_URL or a Supabase publishable/anon key');
     return;
   }
 
