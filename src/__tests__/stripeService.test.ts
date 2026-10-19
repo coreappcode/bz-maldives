@@ -1,10 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createPaymentIntent, toStripeAmount, fromStripeAmount } from '../lib/stripeService';
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('createPaymentIntent', () => {
-  it('blocks MVR before making a Stripe request', async () => {
+  it('forwards MVR payment requests to the configured payment endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ clientSecret: 'secret', paymentIntentId: 'pi_test' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
     await expect(createPaymentIntent({ amount: 1000, currency: 'mvr' }))
-      .rejects.toThrow('Stripe does not support MVR payments');
+      .resolves.toEqual({ clientSecret: 'secret', paymentIntentId: 'pi_test' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: expect.stringContaining('"currency":"mvr"'),
+    });
   });
 });
 

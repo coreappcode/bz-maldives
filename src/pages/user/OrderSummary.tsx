@@ -344,17 +344,12 @@ const OrderSummaryPage: React.FC = () => {
     && !minimumOrderNotMet
     && !pricingError
     && !productValidationWarning
-    && !IS_MALDIVES_STOREFRONT
   );
 
   const calculateTotal = () => displayTotal;
 
   const handleProceedToPayment = async () => {
     setProceedError(null);
-    if (IS_MALDIVES_STOREFRONT) {
-      setProceedError('Online payment in MVR is unavailable through the current Stripe integration. Cash on Delivery is not available for international orders, so no order can be submitted.');
-      return;
-    }
 
     const userId = user?.id || currentAuthUser?.userId;
     if (!userId) {
@@ -890,12 +885,6 @@ const OrderSummaryPage: React.FC = () => {
                 </div>
               )}
 
-              {IS_MALDIVES_STOREFRONT && (
-                <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  Online payment in MVR is unavailable through the current Stripe integration. Cash on Delivery is not available for international orders, so no order can be submitted.
-                </div>
-              )}
-
               {minimumOrderNotMet ? (
                 <button
                   onClick={() => navigate('/cart')}
@@ -913,8 +902,6 @@ const OrderSummaryPage: React.FC = () => {
                     ? 'Refreshing Shipping...'
                     : deliveryEstimateLoading
                       ? 'Fetching Delivery Date...'
-                    : IS_MALDIVES_STOREFRONT
-                      ? 'MVR payment unavailable'
                     : pincodeNotServiceable
                       ? 'Pincode not serviceable'
                     : pricingError
@@ -925,11 +912,9 @@ const OrderSummaryPage: React.FC = () => {
                 </button>
               )}
 
-              {!IS_MALDIVES_STOREFRONT && (
-                <div className="flex items-center justify-center gap-1.5 text-[12px] text-[#067d62] mt-3">
-                  🔒 Secure checkout powered by Stripe
-                </div>
-              )}
+              <div className="flex items-center justify-center gap-1.5 text-[12px] text-[#067d62] mt-3">
+                🔒 Secure checkout powered by Stripe
+              </div>
 
               <hr className="border-t border-[#eee] my-4" />
 
