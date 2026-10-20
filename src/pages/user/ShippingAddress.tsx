@@ -39,6 +39,30 @@ interface ShippingFormData {
   delivery_notes?: string;
 }
 
+const createEmptyShippingFormData = (): ShippingFormData => ({
+  full_name: '',
+  phone_number: '',
+  email: '',
+  country: IS_MALDIVES_STOREFRONT ? MALDIVES_COUNTRY_NAME : '',
+  street_address_1: '',
+  street_address_2: '',
+  city: '',
+  state: '',
+  postal_code: '',
+  delivery_notes: '',
+});
+
+const getShippingDraftKey = (userId: string): string =>
+  `beauzead_checkout_shipping_draft:${IS_MALDIVES_STOREFRONT ? 'MV' : 'GLOBAL'}:${userId}`;
+
+const removeShippingDraft = (userId: string): void => {
+  try {
+    localStorage.removeItem(getShippingDraftKey(userId));
+  } catch (err) {
+    console.error('Unable to remove checkout address draft:', err);
+  }
+};
+
 const ShippingAddressPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -60,20 +84,28 @@ const ShippingAddressPage: React.FC = () => {
   const [addressSelectionLoading, setAddressSelectionLoading] = useState(false);
   const [countryOptions, setCountryOptions] = useState<Country[]>([]);
   const [selectedCartItemIds, setSelectedCartItemIds] = useState<string[]>([]);
+  const [draftOwnerId, setDraftOwnerId] = useState<string | null>(null);
+  const [draftSaveError, setDraftSaveError] = useState(false);
   const pricingRequestRef = useRef(0);
+  const hydratedDraftUserRef = useRef<string | null>(null);
+  const restoredDraftUserRef = useRef<string | null>(null);
 
-  const [formData, setFormData] = useState<ShippingFormData>({
-    full_name: '',
-    phone_number: '',
-    email: '',
-    country: IS_MALDIVES_STOREFRONT ? MALDIVES_COUNTRY_NAME : '',
-    street_address_1: '',
-    street_address_2: '',
-    city: '',
-    state: '',
-    postal_code: '',
-    delivery_notes: '',
-  });
+  const [formData, setFormData] = useState<ShippingFormData>(createEmptyShippingFormData);
+
+  useEffect(() => {
+    if (!draftOwnerId || useExistingAddress) return;
+
+    try {
+      localStorage.setItem(
+        getShippingDraftKey(draftOwnerId),
+        JSON.stringify({ formData, updatedAt: Date.now() }),
+      );
+      setDraftSaveError(false);
+    } catch (err) {
+      console.error('Unable to save checkout address draft:', err);
+      setDraftSaveError(true);
+    }
+  }, [draftOwnerId, formData, useExistingAddress]);
 
   // Load saved addresses from Supabase or fallback to localStorage
   useEffect(() => {
@@ -176,6 +208,39 @@ const ShippingAddressPage: React.FC = () => {
           return;
         }
 
+        let restoredDraft: ShippingFormData | null = null;
+        if (hydratedDraftUserRef.current !== userId) {
+          const emptyForm = createEmptyShippingFormData();
+          try {
+            const savedDraft = localStorage.getItem(getShippingDraftKey(userId));
+            if (savedDraft) {
+              const parsed = JSON.parse(savedDraft) as { formData?: Partial<ShippingFormData> };
+              if (parsed.formData && typeof parsed.formData === 'object') {
+                restoredDraft = Object.fromEntries(
+                  Object.entries(emptyForm).map(([key, fallback]) => [
+                    key,
+                    typeof parsed.formData?.[key as keyof ShippingFormData] === 'string'
+                      ? parsed.formData[key as keyof ShippingFormData]
+                      : fallback,
+                  ]),
+                ) as ShippingFormData;
+                if (IS_MALDIVES_STOREFRONT) restoredDraft.country = MALDIVES_COUNTRY_NAME;
+              }
+            }
+          } catch (err) {
+            console.error('Unable to restore checkout address draft:', err);
+            removeShippingDraft(userId);
+          }
+
+          hydratedDraftUserRef.current = userId;
+          restoredDraftUserRef.current = restoredDraft ? userId : null;
+          setDraftOwnerId(userId);
+          setFormData(restoredDraft || emptyForm);
+          setSelectedAddressId(null);
+          setUseExistingAddress(false);
+        }
+        const hasRestoredDraft = restoredDraftUserRef.current === userId;
+
         // Fetch from DB
         const result = await getUserAddresses(userId);
         if (result.data && result.data.length > 0) {
@@ -199,7 +264,9 @@ const ShippingAddressPage: React.FC = () => {
           setSavedAddresses(supportedAddresses);
 
           // Auto-select default address if exists
-          const defaultAddress = supportedAddresses.find(addr => addr.is_default);
+          const defaultAddress = hasRestoredDraft
+            ? undefined
+            : supportedAddresses.find(addr => addr.is_default);
           if (defaultAddress) {
             setSelectedAddressId(defaultAddress.id);
             setUseExistingAddress(true);
@@ -329,10 +396,26 @@ const ShippingAddressPage: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    const next = { ...formData, [name]: value };
+    if (draftOwnerId) {
+      try {
+        localStorage.setItem(
+          getShippingDraftKey(draftOwnerId),
+          JSON.stringify({ formData: next, updatedAt: Date.now() }),
+        );
+        setDraftSaveError(false);
+      } catch (err) {
+        console.error('Unable to save checkout address draft:', err);
+        setDraftSaveError(true);
+      }
+    }
+    setFormData(next);
   };
 
   const handleSelectAddress = (address: UserAddress) => {
+    if (draftOwnerId) removeShippingDraft(draftOwnerId);
+    setDraftSaveError(false);
+    setUseExistingAddress(true);
     setSelectedAddressId(address.id);
     setAddressSelectionLoading(true);
 
@@ -497,6 +580,7 @@ const ShippingAddressPage: React.FC = () => {
       };
 
       localStorage.setItem('beauzead_checkout_shipping', JSON.stringify(shippingData));
+      if (userId) removeShippingDraft(userId);
 
       // Navigate to order summary
       navigate('/checkout/review');
@@ -584,7 +668,11 @@ const ShippingAddressPage: React.FC = () => {
                 New Address
               </button>
               <button
-                onClick={() => setUseExistingAddress(true)}
+                onClick={() => {
+                  if (draftOwnerId) removeShippingDraft(draftOwnerId);
+                  setDraftSaveError(false);
+                  setUseExistingAddress(true);
+                }}
                 className={`flex-1 py-1.5 sm:py-2.5 px-2 sm:px-4 rounded-md sm:rounded-lg border sm:border-2 text-[12px] sm:text-sm font-semibold transition-all ${
                   useExistingAddress
                     ? 'border-[#ff9900] bg-[#fffbf0] text-[#0f1111]'
@@ -831,6 +919,12 @@ const ShippingAddressPage: React.FC = () => {
               {error && (
                 <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700">
                   {error}
+                </div>
+              )}
+
+              {draftSaveError && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-amber-800" role="status">
+                  Your address draft could not be saved on this device. Keep this page open until you continue checkout.
                 </div>
               )}
 
