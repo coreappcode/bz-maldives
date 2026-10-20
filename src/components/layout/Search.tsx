@@ -9,6 +9,9 @@ import { supabase } from '../../lib/supabase';
 const GUEST_HISTORY_KEY = 'bzead_search_history';
 const GUEST_HISTORY_MAX = 20; // store up to 20 for migration coverage
 const DISPLAY_LIMIT = 5;
+const SUGGESTION_CACHE_LIMIT = 100;
+const SUGGESTION_CACHE_TTL_MS = 5 * 60 * 1000;
+const SUGGESTION_MIN_QUERY_LENGTH = 2;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface SearchSuggestion {
@@ -83,13 +86,17 @@ function deleteGuestHistoryByQuery(typedInput: string): void {
       (e) => e.typed_input.toLowerCase() !== typedInput.toLowerCase(),
     );
     localStorage.setItem(GUEST_HISTORY_KEY, JSON.stringify(filtered));
-  } catch {}
+  } catch {
+    // Search history is optional when browser storage is unavailable.
+  }
 }
 
 function clearGuestHistory(): void {
   try {
     localStorage.removeItem(GUEST_HISTORY_KEY);
-  } catch {}
+  } catch {
+    // Search history is optional when browser storage is unavailable.
+  }
 }
 
 /** Keep first (most-recent) occurrence of each typed_input */
@@ -126,18 +133,20 @@ async function resolveCategoryNames(
 // ── Session-level suggestion cache (lives as long as the page is open) ──────
 // Keyed by lowercase normalized query → avoids hitting DB for repeated /
 // revisited search terms within the same browsing session.
-const _suggestionCache = new Map<string, SearchSuggestion[]>();
+const _suggestionCache = new Map<string, { data: SearchSuggestion[]; expiresAt: number }>();
 
 // ── Component ──────────────────────────────────────────────────────────────
 export const Search: React.FC = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionsStatus, setSuggestionsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const containerRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const suggestionRequestId = useRef(0);
   const navigate = useNavigate();
   const { user } = useAuth();
   const userId = user?.id ?? null;
@@ -147,7 +156,6 @@ export const Search: React.FC = () => {
     const handleOutsideClick = (event: MouseEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) {
         setShowDropdown(false);
-        setShowSuggestions(false);
         setActiveSuggestionIndex(-1);
       }
     };
@@ -157,30 +165,45 @@ export const Search: React.FC = () => {
 
   // ── Live product suggestions ──
   useEffect(() => {
-    const value = query.trim();
-    if (value.length < 1) {
+    const value = query.trim().replace(/\s+/g, ' ');
+    const requestId = ++suggestionRequestId.current;
+    if (value.length < SUGGESTION_MIN_QUERY_LENGTH) {
       setSuggestions([]);
-      setShowSuggestions(false);
+      setSuggestionsStatus('idle');
       setActiveSuggestionIndex(-1);
       return;
     }
 
     const cacheKey = value.toLowerCase();
+    const cached = _suggestionCache.get(cacheKey);
 
-    // Serve from cache instantly if available (no DB round-trip)
-    if (_suggestionCache.has(cacheKey)) {
-      setSuggestions(_suggestionCache.get(cacheKey)!);
-      setShowSuggestions(true);
+    if (cached && cached.expiresAt > Date.now()) {
+      setSuggestions(cached.data);
+      setSuggestionsStatus('success');
       setActiveSuggestionIndex(-1);
       return;
     }
+    if (cached) _suggestionCache.delete(cacheKey);
 
+    setSuggestions([]);
+    setSuggestionsStatus('loading');
+    setActiveSuggestionIndex(-1);
     const timer = window.setTimeout(async () => {
-      const { data } = await searchPublicProductsByKeywords(value, 8);
+      const { data, error } = await searchPublicProductsByKeywords(value, 8);
+      if (requestId !== suggestionRequestId.current) return;
+      if (error) {
+        setSuggestions([]);
+        setSuggestionsStatus('error');
+        return;
+      }
       const results = (data || []) as SearchSuggestion[];
-      _suggestionCache.set(cacheKey, results);
+      _suggestionCache.set(cacheKey, { data: results, expiresAt: Date.now() + SUGGESTION_CACHE_TTL_MS });
+      if (_suggestionCache.size > SUGGESTION_CACHE_LIMIT) {
+        const oldestKey = _suggestionCache.keys().next().value;
+        if (oldestKey) _suggestionCache.delete(oldestKey);
+      }
       setSuggestions(results);
-      setShowSuggestions(true);
+      setSuggestionsStatus('success');
       setActiveSuggestionIndex(-1);
     }, 180);
     return () => window.clearTimeout(timer);
@@ -285,7 +308,6 @@ export const Search: React.FC = () => {
     const value = rawQuery.trim();
     if (!value) return;
     setShowDropdown(false);
-    setShowSuggestions(false);
     const { user_location, user_country } = getLocationData();
     saveHistory({
       typed_input: value,
@@ -302,7 +324,6 @@ export const Search: React.FC = () => {
     const selectedValue = suggestion.name;
     setQuery(selectedValue);
     setShowDropdown(false);
-    setShowSuggestions(false);
     const productRef = String(suggestion.public_product_id || suggestion.slug || suggestion.id || '').trim();
     const { user_location, user_country } = getLocationData();
 
@@ -359,11 +380,10 @@ export const Search: React.FC = () => {
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       setShowDropdown(false);
-      setShowSuggestions(false);
       setActiveSuggestionIndex(-1);
       return;
     }
-    if (!showSuggestions || suggestions.length === 0) return;
+    if (suggestionsStatus !== 'success' || suggestions.length === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setActiveSuggestionIndex((prev) => {
@@ -384,7 +404,7 @@ export const Search: React.FC = () => {
   const showHistoryPanel =
     showDropdown && query.trim() === '' && (historyLoading || searchHistory.length > 0);
   const showSuggestionsPanel =
-    showDropdown && query.trim() !== '' && showSuggestions && suggestions.length > 0;
+    showDropdown && query.trim().length >= SUGGESTION_MIN_QUERY_LENGTH;
 
   return (
     <div
@@ -392,23 +412,55 @@ export const Search: React.FC = () => {
       style={{ top: 'var(--bz-header-offset)' }}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 sm:py-4">
-        <form onSubmit={handleSearch} className="flex items-center space-x-2" ref={containerRef}>
+        <form onSubmit={handleSearch} className="flex items-center space-x-2" ref={containerRef} role="search">
           <div className="flex-1 relative">
             <SearchIcon className="absolute left-3 sm:left-4 top-1/2 transform -translate-y-1/2 h-4 sm:h-5 w-4 sm:w-5 text-gray-500" />
             <input
+              ref={inputRef}
+              id="storefront-product-search"
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setShowDropdown(true);
+              }}
               onFocus={() => {
                 setShowDropdown(true);
                 fetchHistory();
-                if (suggestions.length > 0) setShowSuggestions(true);
               }}
               onKeyDown={handleInputKeyDown}
               placeholder="Search for products, brands..."
-              className="w-full pl-9 sm:pl-12 pr-3 sm:pr-4 py-2 sm:py-3 text-sm sm:text-base bg-white border-2 border-gray-200 text-gray-900 rounded-lg focus:outline-none focus:border-amber-500 transition-colors"
+              className="w-full pl-9 sm:pl-12 pr-10 py-2 sm:py-3 text-sm sm:text-base bg-white border-2 border-gray-200 text-gray-900 rounded-lg focus:outline-none focus:border-amber-500 transition-colors"
               autoComplete="off"
+              role="combobox"
+              aria-label="Search products"
+              aria-autocomplete="list"
+              aria-haspopup="listbox"
+              aria-expanded={showSuggestionsPanel}
+              aria-controls="storefront-search-suggestions"
+              aria-activedescendant={
+                activeSuggestionIndex >= 0
+                  ? `storefront-search-option-${activeSuggestionIndex}`
+                  : undefined
+              }
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery('');
+                  setSuggestions([]);
+                  setSuggestionsStatus('idle');
+                  setActiveSuggestionIndex(-1);
+                  setShowDropdown(true);
+                  inputRef.current?.focus();
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-gray-800"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
 
             {/* ── Recent Searches (empty query) ── */}
             {showHistoryPanel && (
@@ -467,35 +519,59 @@ export const Search: React.FC = () => {
             {/* ── Live Product Suggestions (while typing) ── */}
             {showSuggestionsPanel && (
               <div className="absolute left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-[70] overflow-hidden">
-                {suggestions.map((suggestion, index) => (
-                  <button
-                    key={suggestion.id}
-                    type="button"
-                    onClick={() => handleSuggestionSelect(suggestion)}
-                    className={`w-full px-3 sm:px-4 py-2.5 text-left flex items-center gap-3 transition-colors ${
-                      index === activeSuggestionIndex ? 'bg-amber-50' : 'hover:bg-gray-50'
-                    }`}
-                  >
-                    {suggestion.image_url && !isBlobUrl(suggestion.image_url) ? (
-                      <img
-                        src={resolveProductImageUrl(suggestion.image_url)}
-                        alt={suggestion.name}
-                        className="h-8 w-8 rounded object-cover bg-gray-100"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center">
-                        <SearchIcon className="h-4 w-4 text-gray-400" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-sm text-gray-900 truncate">{suggestion.name}</p>
-                      {suggestion.brand && (
-                        <p className="text-xs text-gray-500 truncate">{suggestion.brand}</p>
-                      )}
-                    </div>
-                  </button>
-                ))}
+                {suggestionsStatus === 'loading' && (
+                  <div className="flex items-center justify-center py-4 gap-2 text-gray-500 text-sm" role="status">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Searching products...</span>
+                  </div>
+                )}
+                {suggestionsStatus === 'error' && (
+                  <p className="px-4 py-3 text-sm text-red-600" role="status">
+                    Search suggestions are temporarily unavailable. Press Go to view results.
+                  </p>
+                )}
+                {suggestionsStatus === 'success' && suggestions.length === 0 && (
+                  <p className="px-4 py-3 text-sm text-gray-500" role="status">
+                    No matching products. Press Go to search all products.
+                  </p>
+                )}
+                {suggestionsStatus === 'success' && suggestions.length > 0 && (
+                  <ul id="storefront-search-suggestions" role="listbox" aria-label="Product suggestions">
+                    {suggestions.map((suggestion, index) => (
+                      <li key={suggestion.id} role="presentation">
+                        <button
+                          id={`storefront-search-option-${index}`}
+                          type="button"
+                          role="option"
+                          aria-selected={index === activeSuggestionIndex}
+                          onClick={() => handleSuggestionSelect(suggestion)}
+                          className={`w-full px-3 sm:px-4 py-2.5 text-left flex items-center gap-3 transition-colors ${
+                            index === activeSuggestionIndex ? 'bg-amber-50' : 'hover:bg-gray-50'
+                          }`}
+                        >
+                          {suggestion.image_url && !isBlobUrl(suggestion.image_url) ? (
+                            <img
+                              src={resolveProductImageUrl(suggestion.image_url)}
+                              alt=""
+                              className="h-8 w-8 rounded object-cover bg-gray-100"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center">
+                              <SearchIcon className="h-4 w-4 text-gray-400" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-sm text-gray-900 truncate">{suggestion.name}</p>
+                            {suggestion.brand && (
+                              <p className="text-xs text-gray-500 truncate">{suggestion.brand}</p>
+                            )}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>

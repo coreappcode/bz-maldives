@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { StorefrontHeader } from '../components/layout/StorefrontHeader';
 import { Footer } from '../components/layout/Footer';
@@ -25,11 +25,11 @@ export const SectionProducts: React.FC = () => {
   const { section } = useParams<{ section: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { formatPrice } = useCurrency();
+  const { currency, convertPrice, formatPrice } = useCurrency();
   const { user, currentAuthUser } = useAuth();
   const [showSidebar, setShowSidebar] = useState(false);
   const [filters, setFilters] = useState<FilterOptions>({
-    priceRange: [0, 200000],
+    priceRange: [0, Number.POSITIVE_INFINITY],
     rating: null,
     inStock: false,
     sortBy: 'featured',
@@ -48,6 +48,12 @@ export const SectionProducts: React.FC = () => {
   const [publicPriceLoading, setPublicPriceLoading] = useState(false);
   const [categoryNameMap, setCategoryNameMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [searchTotalCount, setSearchTotalCount] = useState(0);
+  const [hasMoreSearchResults, setHasMoreSearchResults] = useState(false);
+  const searchRequestId = useRef(0);
 
   const selectedCountry = useDestinationCountry({
     userId: user?.id || currentAuthUser?.userId || null,
@@ -58,22 +64,12 @@ export const SectionProducts: React.FC = () => {
     ? sectionMeta[currentSection]
     : { title: 'Unknown Section', subtitle: '', icon: '🛍️' };
   const searchTerm = (searchParams.get('search') || '').trim().toLowerCase();
-  const searchTokens = useMemo(() => {
-    // Normalize apostrophes/backticks so tokens match the normalized haystack
-    // e.g. "pond's" → "ponds", "l'oreal" → "loreal"
-    return Array.from(
-      new Set(
-        searchTerm
-          .replace(/['`]/g, '')        // strip apostrophes first
-          .split(/\s+/)
-          .map((token) => token.replace(/[^a-z0-9]/gi, '').trim())
-          .filter(Boolean)
-      )
-    );
-  }, [searchTerm]);
-
   useEffect(() => {
     let cancelled = false;
+    const requestId = ++searchRequestId.current;
+    setSearchError(null);
+    setSearchTotalCount(0);
+    setHasMoreSearchResults(false);
 
     if (!currentSection) {
       setProducts([]);
@@ -88,14 +84,21 @@ export const SectionProducts: React.FC = () => {
 
       if (searchTerm) {
         const [searchRes, catsRes] = await Promise.all([
-          searchPublicProductsByKeywords(searchTerm, 200),
+          searchPublicProductsByKeywords(searchTerm, 50, 0, true),
           fetchCategoriesFlat(),
         ]);
 
-        if (!cancelled) {
+        if (!cancelled && requestId === searchRequestId.current) {
           const nameMap: Record<string, string> = {};
           (catsRes.data || []).forEach((c: any) => { nameMap[c.id] = c.name; });
           setCategoryNameMap(nameMap);
+
+          if (searchRes.error) {
+            setSearchError(searchRes.error);
+            setProducts([]);
+            setLoading(false);
+            return;
+          }
 
           productsToRender = (searchRes.data || []) as Product[];
           const enriched = productsToRender.map((p: any) => ({
@@ -103,6 +106,8 @@ export const SectionProducts: React.FC = () => {
             category_name: nameMap[p.category] || '',
           })) as Product[];
           setProducts(enriched);
+          setSearchTotalCount(searchRes.totalCount);
+          setHasMoreSearchResults(searchRes.totalCount > enriched.length);
           setLoading(false);
         }
 
@@ -140,7 +145,33 @@ export const SectionProducts: React.FC = () => {
     return () => { cancelled = true; };
   }, [currentSection, searchTerm]);
 
+  const loadMoreSearchResults = async () => {
+    if (!searchTerm || loadingMore || !hasMoreSearchResults) return;
+    const requestId = searchRequestId.current;
+    setLoadingMore(true);
+    const { data, totalCount, error } = await searchPublicProductsByKeywords(
+      searchTerm,
+      50,
+      products.length,
+      true,
+    );
+    if (requestId === searchRequestId.current) {
+      if (error) {
+        setSearchError(error);
+      } else {
+        setProducts((current) => {
+          const existingIds = new Set(current.map((product) => product.id));
+          return [...current, ...(data as Product[]).filter((product) => !existingIds.has(product.id))];
+        });
+        setSearchTotalCount(totalCount);
+        setHasMoreSearchResults(products.length + data.length < totalCount);
+      }
+      setLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
+    let cancelled = false;
     const loadPublicPrices = async () => {
       if (!selectedCountry) {
         setPublicPriceMap({});
@@ -157,11 +188,12 @@ export const SectionProducts: React.FC = () => {
       }
 
       setPublicPriceLoading(true);
-      const { data } = await fetchPublicProductPrices(
+      const { data, error } = await fetchPublicProductPrices(
         products.map((p) => p.id),
         selectedCountry
       );
 
+      if (cancelled) return;
       const map: Record<string, number> = {};
       const mrpMap: Record<string, number> = {};
       (data || []).forEach((item) => {
@@ -171,18 +203,31 @@ export const SectionProducts: React.FC = () => {
 
       setPublicPriceMap(map);
       setPublicMrpMap(mrpMap);
+      setPriceError(error);
       setPublicPriceLoading(false);
     };
 
     void loadPublicPrices();
+    return () => { cancelled = true; };
   }, [products, selectedCountry]);
 
-  // SL51: Compute dynamic price range max from loaded products
+  const displayPriceByProduct = useMemo(() => {
+    const prices: Record<string, number> = {};
+    products.forEach((product) => {
+      const publicPrice = publicPriceMap[product.id];
+      if (Number.isFinite(publicPrice)) {
+        prices[product.id] = convertPrice(publicPrice, product.currency || 'INR');
+      }
+    });
+    return prices;
+  }, [products, publicPriceMap, convertPrice]);
+
+  // Price filters and sorting use the same country-specific price as product cards.
   const dynamicMaxPrice = useMemo(() => {
-    if (products.length === 0) return 200000;
-    const max = Math.max(...products.map((p) => p.price || 0));
-    return Math.ceil(max / 1000) * 1000 || 200000;
-  }, [products]);
+    const prices = Object.values(displayPriceByProduct);
+    if (prices.length === 0) return 200000;
+    return Math.ceil(Math.max(...prices) / 1000) * 1000 || 200000;
+  }, [displayPriceByProduct]);
 
   // Extract unique categories from products (resolved names)
   const availableCategories = useMemo(() => {
@@ -200,8 +245,11 @@ export const SectionProducts: React.FC = () => {
   // Filter and sort products
   const filteredProducts = useMemo(() => {
     const filtered = products.filter((product) => {
-      // Filter by price
-      if (product.price < filters.priceRange[0] || product.price > filters.priceRange[1]) {
+      const marketPrice = displayPriceByProduct[product.id];
+      if (selectedCountry && !publicPriceLoading && !Number.isFinite(marketPrice)) return false;
+      if (Number.isFinite(marketPrice)) {
+        if (marketPrice < filters.priceRange[0] || marketPrice > filters.priceRange[1]) return false;
+      } else if (filters.priceRange[0] > 0 || Number.isFinite(filters.priceRange[1])) {
         return false;
       }
       // Filter by rating
@@ -216,41 +264,21 @@ export const SectionProducts: React.FC = () => {
       if (filters.category && product.category !== filters.category) {
         return false;
       }
-      // Search from query params — normalize apostrophes/backticks on both sides
-      // so "Pond's" (haystack) matches "ponds" (stripped token) and vice-versa
-      if (searchTokens.length > 0) {
-        const rawHaystack = [
-          product.name,
-          product.brand,
-          product.description,
-          product.short_description,
-          categoryNameMap[product.category || ''],
-          ...(Array.isArray(product.tags) ? product.tags : []),
-        ]
-          .map((value) => String(value || '').toLowerCase())
-          .join(' ');
-
-        // Normalize: strip apostrophes/backticks so "pond's" === "ponds"
-        const haystack = rawHaystack.replace(/['`]/g, '');
-
-        const originalQuery = String(searchParams.get('search') || '').trim().toLowerCase();
-        const normalizedQuery = originalQuery.replace(/['`]/g, '');
-        const matchesPhrase = normalizedQuery.length > 0 && haystack.includes(normalizedQuery);
-        const matchesAnyToken = searchTokens.some((token) => haystack.includes(token));
-
-        if (!matchesPhrase && !matchesAnyToken) {
-          return false;
-        }
-      }
       return true;
     });
 
     // Sort products
     switch (filters.sortBy) {
       case 'price-low-high':
-        return [...filtered].sort((a, b) => a.price - b.price);
+        return [...filtered].sort(
+          (a, b) => (displayPriceByProduct[a.id] ?? Number.POSITIVE_INFINITY)
+            - (displayPriceByProduct[b.id] ?? Number.POSITIVE_INFINITY),
+        );
       case 'price-high-low':
-        return [...filtered].sort((a, b) => b.price - a.price);
+        return [...filtered].sort(
+          (a, b) => (displayPriceByProduct[b.id] ?? Number.NEGATIVE_INFINITY)
+            - (displayPriceByProduct[a.id] ?? Number.NEGATIVE_INFINITY),
+        );
       case 'rating':
         return [...filtered].sort((a, b) => (b.rating || 0) - (a.rating || 0));
       case 'newest':
@@ -259,7 +287,7 @@ export const SectionProducts: React.FC = () => {
       default:
         return filtered;
     }
-  }, [products, filters, searchTokens, categoryNameMap, searchParams]);
+  }, [products, filters, displayPriceByProduct, selectedCountry, publicPriceLoading]);
 
   // SL52: Redirect to not-found for invalid section
   useEffect(() => {
@@ -267,11 +295,6 @@ export const SectionProducts: React.FC = () => {
       navigate('/not-found', { replace: true });
     }
   }, [currentSection, section, navigate]);
-
-  // SL51: Reset price range when dynamicMaxPrice changes
-  useEffect(() => {
-    setFilters((prev) => ({ ...prev, priceRange: [0, dynamicMaxPrice] }));
-  }, [dynamicMaxPrice]);
 
   const handlePriceChange = (type: 'min' | 'max', value: number) => {
     const [min, max] = filters.priceRange;
@@ -284,7 +307,7 @@ export const SectionProducts: React.FC = () => {
 
   const resetFilters = () => {
     setFilters({
-      priceRange: [0, dynamicMaxPrice],
+      priceRange: [0, Number.POSITIVE_INFINITY],
       rating: null,
       inStock: false,
       sortBy: 'featured',
@@ -338,7 +361,11 @@ export const SectionProducts: React.FC = () => {
                 Search results for "{searchParams.get('search')}"
               </p>
             )}
-            <p className="text-xs text-gray-500 mt-1">{filteredProducts.length} products</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {searchTerm
+                ? `${filteredProducts.length} shown · ${searchTotalCount} matching products`
+                : `${filteredProducts.length} products`}
+            </p>
           </div>
 
           {/* Mobile Filter Toggle */}
@@ -429,30 +456,36 @@ export const SectionProducts: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="text-sm text-gray-500 mb-2 block">
-                    Min: {formatPrice(filters.priceRange[0])}
+                    Min: {formatPrice(filters.priceRange[0], currency)}
                   </label>
                   <input
-                    type="range"
+                    type="number"
                     min="0"
-                    max={dynamicMaxPrice}
-                    step="1000"
+                    step="0.01"
                     value={filters.priceRange[0]}
                     onChange={(e) => handlePriceChange('min', Number(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    aria-label="Minimum price"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
                 <div>
                   <label className="text-sm text-gray-500 mb-2 block">
-                    Max: {formatPrice(filters.priceRange[1])}
+                    Max: {Number.isFinite(filters.priceRange[1])
+                      ? formatPrice(filters.priceRange[1], currency)
+                      : 'Any price'}
                   </label>
                   <input
-                    type="range"
+                    type="number"
                     min="0"
-                    max={dynamicMaxPrice}
-                    step="1000"
-                    value={filters.priceRange[1]}
-                    onChange={(e) => handlePriceChange('max', Number(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    step="0.01"
+                    value={Number.isFinite(filters.priceRange[1]) ? filters.priceRange[1] : ''}
+                    placeholder={String(dynamicMaxPrice)}
+                    onChange={(e) => handlePriceChange(
+                      'max',
+                      e.target.value === '' ? Number.POSITIVE_INFINITY : Number(e.target.value),
+                    )}
+                    aria-label="Maximum price"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
               </div>
@@ -530,6 +563,11 @@ export const SectionProducts: React.FC = () => {
 
           {/* Products Grid */}
           <div className="md:col-span-3">
+            {(searchError || priceError) && (
+              <p className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                {searchError || priceError}
+              </p>
+            )}
             {loading ? (
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -558,9 +596,23 @@ export const SectionProducts: React.FC = () => {
                     product={product}
                     publicUnitPrice={publicPriceMap[product.id]}
                     markupMrp={publicMrpMap[product.id]}
-                    priceLoading={publicPriceLoading}
+                    priceLoading={publicPriceLoading || Boolean(
+                      selectedCountry && !Number.isFinite(publicPriceMap[product.id]),
+                    )}
                   />
                 ))}
+              </div>
+            )}
+            {!loading && searchTerm && hasMoreSearchResults && (
+              <div className="mt-6 text-center">
+                <button
+                  type="button"
+                  onClick={() => void loadMoreSearchResults()}
+                  disabled={loadingMore}
+                  className="rounded-lg bg-black px-6 py-3 font-semibold text-white hover:bg-gray-900 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {loadingMore ? 'Loading more products...' : 'Load more results'}
+                </button>
               </div>
             )}
           </div>

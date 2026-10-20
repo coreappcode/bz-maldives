@@ -215,30 +215,80 @@ export async function fetchProducts(filters?: {
   return { data: products, error: error?.message || null, count: count || 0 };
 }
 
-export async function searchPublicProductsByKeywords(queryText: string, limit = 8) {
-  const query = (queryText || '').trim();
+export async function searchPublicProductsByKeywords(
+  queryText: string,
+  limit = 8,
+  offset = 0,
+  hydrateProducts = false,
+) {
+  const query = (queryText || '').trim().replace(/\s+/g, ' ').slice(0, 200);
   if (!query) {
-    return { data: [] as any[], error: null as string | null };
+    return { data: [] as any[], totalCount: 0, error: null as string | null };
   }
 
-  // Use the full-text search RPC (search_products_fts) which:
-  //   1. Strips apostrophes/backticks before building tsvector queries so
-  //      "Pond's" / "ponds" / "l'oreal" / "loreal" all match correctly.
-  //   2. Uses weighted tsvector (name=A, brand=B, short_desc=C, tags=D) with
-  //      ts_rank_cd for relevance ordering.
-  //   3. Falls back to trigram ilike when FTS returns 0 results (partial words,
-  //      typos, very short queries like "niaci" → "Niacinamide").
-  const { data, error } = await supabase
-    .rpc('search_products_fts', {
-      query_text: query,
-      result_limit: limit,
-    });
+  const { data, error } = await supabase.rpc('search_products_catalog', {
+    p_query_text: query,
+    p_result_limit: limit,
+    p_result_offset: offset,
+  });
 
   if (error) {
-    return { data: [] as any[], error: error.message || null };
+    return { data: [] as any[], totalCount: 0, error: error.message || null };
   }
 
-  return { data: (data || []) as any[], error: null as string | null };
+  const rankedRows = (data || []) as Array<Record<string, any>>;
+  const totalCount = Number(rankedRows[0]?.total_count || 0);
+  if (!hydrateProducts || rankedRows.length === 0) {
+    return { data: rankedRows, totalCount, error: null as string | null };
+  }
+
+  const orderedIds = rankedRows.map((row) => String(row.id));
+  const { data: products, error: productError } = await supabase
+    .from('products')
+    .select('*, product_variants(*), offer_rules(*)')
+    .in('id', orderedIds)
+    .eq('approval_status', 'approved')
+    .eq('is_active', true);
+
+  if (productError) {
+    return { data: [] as any[], totalCount, error: productError.message || null };
+  }
+
+  const productById = new Map((products || []).map((product: any) => [
+    String(product.id),
+    {
+      ...product,
+      has_variants: Array.isArray(product.product_variants) && product.product_variants.length > 0,
+    },
+  ]));
+  const categoryIds = [...new Set((products || []).flatMap((product: any) => [
+    product.category,
+    product.sub_category,
+    product.product_type,
+  ]).filter(Boolean))];
+  if (categoryIds.length > 0) {
+    const { data: categories, error: categoryError } = await supabase
+      .from('categories')
+      .select('id, name')
+      .in('id', categoryIds);
+
+    if (categoryError) {
+      return { data: [] as any[], totalCount, error: categoryError.message || null };
+    }
+
+    const categoryNames = new Map((categories || []).map((category: any) => [category.id, category.name]));
+    productById.forEach((product: any) => {
+      product.category_name = categoryNames.get(product.category) || null;
+      product.sub_category_name = categoryNames.get(product.sub_category) || null;
+      product.product_type_name = categoryNames.get(product.product_type) || null;
+    });
+  }
+
+  return {
+    data: orderedIds.map((id) => productById.get(id)).filter(Boolean),
+    totalCount,
+    error: null as string | null,
+  };
 }
 
 export async function fetchProductById(id: string, options?: { includeUnapproved?: boolean }) {
