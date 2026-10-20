@@ -22,7 +22,7 @@ interface ProductCardProps {
 export const ProductCard: React.FC<ProductCardProps> = ({
   product,
   publicUnitPrice,
-  priceLoading: _priceLoading = false,
+  priceLoading = false,
   markupMrp,
 }) => {
   const { user } = useAuth();
@@ -38,7 +38,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const alreadyInCart = !!user && items.some((item) => item.product.id === product.id);
 
   const hasResolvedPublicPrice = typeof publicUnitPrice === 'number' && Number.isFinite(publicUnitPrice);
-  const displayUnitPrice = hasResolvedPublicPrice ? publicUnitPrice! : product.price;
+  const displayUnitPrice = hasResolvedPublicPrice
+    ? publicUnitPrice
+    : priceLoading
+      ? undefined
+      : product.price;
   const hasDisplayPrice = typeof displayUnitPrice === 'number' && Number.isFinite(displayUnitPrice);
   // Strikethrough MRP ONLY when markupMrp is available from the pricing service.
   // Never fall back to product.mrp (seller raw INR) — it must not be mixed with markup pricing.
@@ -186,6 +190,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {hasDisplayPrice && (
             <span className="ml-auto font-bold text-base md:text-xl" style={{ color: '#FF0000' }}>
               {formatPrice(displayUnitPrice, publicPriceSourceCurrency)}
+            </span>
+          )}
+          {!hasDisplayPrice && priceLoading && (
+            <span className="ml-auto text-xs text-gray-400" aria-live="polite">
+              Loading price…
             </span>
           )}
         </div>

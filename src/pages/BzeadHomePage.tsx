@@ -328,27 +328,41 @@ export const BzeadHomePage: React.FC = () => {
       }
 
       const cachedPrices = readHomePricesCache(selectedCountry, productIds);
+      const cachedIds = new Set(cachedPrices?.value.productIds || []);
+      const missingCachedPrices = productIds.filter((id) => !cachedIds.has(id));
+      const cachedPricesFresh = Boolean(
+        cachedPrices
+        && missingCachedPrices.length === 0
+        && isCacheFresh(cachedPrices, HOME_PRICE_CACHE_TTL_MS),
+      );
       if (cachedPrices) {
         setPublicPriceMap(cachedPrices.value.sellingPrices);
         setPublicMrpMap(cachedPrices.value.mrps);
-        setPublicPriceLoading(false);
-        if (isCacheFresh(cachedPrices, HOME_PRICE_CACHE_TTL_MS)) return;
+        setPublicPriceLoading(missingCachedPrices.length > 0);
+        if (cachedPricesFresh) return;
       } else {
         setPublicPriceMap({});
         setPublicMrpMap({});
         setPublicPriceLoading(true);
       }
 
-      const { data, error } = await fetchPublicProductPrices(productIds, selectedCountry);
+      const productsToRefresh = cachedPrices && missingCachedPrices.length > 0 && isCacheFresh(cachedPrices, HOME_PRICE_CACHE_TTL_MS)
+        ? missingCachedPrices
+        : productIds;
+      const { data, error } = await fetchPublicProductPrices(productsToRefresh, selectedCountry);
       if (cancelled || priceRequestRef.current !== requestId) return;
       if (error) {
         console.error('Failed to refresh home page prices:', error);
-        if (!cachedPrices) setPublicPriceLoading(false);
+        setPublicPriceLoading(false);
         return;
       }
 
-      const map: Record<string, number> = {};
-      const mrpMap: Record<string, number> = {};
+      const map: Record<string, number> = cachedPrices && productsToRefresh.length !== productIds.length
+        ? { ...cachedPrices.value.sellingPrices }
+        : {};
+      const mrpMap: Record<string, number> = cachedPrices && productsToRefresh.length !== productIds.length
+        ? { ...cachedPrices.value.mrps }
+        : {};
       (data || []).forEach((item) => {
         map[item.productId] = item.publicUnitPrice;
         if (item.markupMrp > 0) mrpMap[item.productId] = item.markupMrp;
@@ -358,7 +372,7 @@ export const BzeadHomePage: React.FC = () => {
       setPublicMrpMap(mrpMap);
       setPublicPriceLoading(false);
       writeHomePricesCache(selectedCountry, {
-        productIds,
+        productIds: Array.from(new Set([...(cachedPrices?.value.productIds || []), ...productIds])),
         sellingPrices: map,
         mrps: mrpMap,
       });

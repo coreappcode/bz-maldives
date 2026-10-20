@@ -20,6 +20,7 @@ export interface HomePagePrices {
   productIds: string[];
   sellingPrices: Record<string, number>;
   mrps: Record<string, number>;
+  priceCachedAtByProductId?: Record<string, number>;
 }
 
 export interface CacheEntry<T> {
@@ -31,6 +32,7 @@ export const HOME_CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 export const HOME_PRICE_CACHE_TTL_MS = 2 * 60 * 1000;
 
 const MAX_STALE_CACHE_AGE_MS = 60 * 60 * 1000;
+const HOME_PRICE_CACHE_MAX_PRODUCTS = 500;
 const MARKET_KEY = IS_MALDIVES_STOREFRONT ? 'MV' : 'GLOBAL';
 const SECTIONS_CACHE_KEY = `beauzead_home_sections_v1:${MARKET_KEY}`;
 const BANNERS_CACHE_KEY = `beauzead_home_banners_v1:${MARKET_KEY}`;
@@ -124,20 +126,101 @@ export function readHomePricesCache(
 
   const requestedIds = normalizeProductIds(productIds);
   const cachedIds = normalizeProductIds(cached.value.productIds);
-  if (
-    requestedIds.length !== cachedIds.length
-    || requestedIds.some((id, index) => id !== cachedIds[index])
-  ) {
-    return null;
+  const cachedPriceIds = requestedIds.filter((id) => {
+    const price = Number(cached.value.sellingPrices[id]);
+    const cachedAt = Number(cached.value.priceCachedAtByProductId?.[id] ?? cached.cachedAt);
+    return cachedIds.includes(id)
+      && Number.isFinite(price)
+      && price > 0
+      && Number.isFinite(cachedAt)
+      && Date.now() - cachedAt <= MAX_STALE_CACHE_AGE_MS;
+  });
+  if (cachedPriceIds.length === 0) return null;
+
+  const sellingPrices: Record<string, number> = {};
+  const mrps: Record<string, number> = {};
+  const priceCachedAtByProductId: Record<string, number> = {};
+  for (const id of cachedPriceIds) {
+    sellingPrices[id] = Number(cached.value.sellingPrices[id]);
+    const mrp = Number(cached.value.mrps[id]);
+    if (Number.isFinite(mrp) && mrp > 0) mrps[id] = mrp;
+    priceCachedAtByProductId[id] = Number(
+      cached.value.priceCachedAtByProductId?.[id] ?? cached.cachedAt,
+    );
   }
 
-  return cached;
+  return {
+    cachedAt: Math.min(...Object.values(priceCachedAtByProductId)),
+    value: {
+      productIds: cachedPriceIds,
+      sellingPrices,
+      mrps,
+      priceCachedAtByProductId,
+    },
+  };
 }
 
 export function writeHomePricesCache(country: string, value: HomePagePrices): void {
-  writeCache(priceCacheKey(country), {
-    ...value,
-    productIds: normalizeProductIds(value.productIds),
+  const key = priceCacheKey(country);
+  const now = Date.now();
+  let mergedPrices: HomePagePrices = {
+    productIds: [],
+    sellingPrices: {},
+    mrps: {},
+    priceCachedAtByProductId: {},
+  };
+
+  const existing = readCache<HomePagePrices>(key);
+  if (
+    existing?.value
+    && Array.isArray(existing.value.productIds)
+    && existing.value.sellingPrices
+    && existing.value.mrps
+  ) {
+    const existingIds = normalizeProductIds(existing.value.productIds);
+    mergedPrices = {
+      productIds: existingIds,
+      sellingPrices: { ...existing.value.sellingPrices },
+      mrps: { ...existing.value.mrps },
+      priceCachedAtByProductId: Object.fromEntries(existingIds.map((id) => [
+        id,
+        Number(existing.value.priceCachedAtByProductId?.[id] ?? existing.cachedAt),
+      ])),
+    };
+  }
+
+  for (const id of normalizeProductIds(value.productIds)) {
+    const price = Number(value.sellingPrices[id]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    mergedPrices.sellingPrices[id] = price;
+    const mrp = Number(value.mrps[id]);
+    if (Number.isFinite(mrp) && mrp > 0) mergedPrices.mrps[id] = mrp;
+    else delete mergedPrices.mrps[id];
+    mergedPrices.priceCachedAtByProductId![id] = now;
+  }
+
+  const retainedIds = normalizeProductIds(mergedPrices.productIds.concat(
+    Object.keys(mergedPrices.priceCachedAtByProductId || {}),
+  )).filter((id) => {
+    const cachedAt = Number(mergedPrices.priceCachedAtByProductId?.[id]);
+    return Number.isFinite(cachedAt) && now - cachedAt <= MAX_STALE_CACHE_AGE_MS;
+  }).sort((left, right) =>
+    Number(mergedPrices.priceCachedAtByProductId?.[right])
+      - Number(mergedPrices.priceCachedAtByProductId?.[left])
+  ).slice(0, HOME_PRICE_CACHE_MAX_PRODUCTS);
+
+  const retainedSet = new Set(retainedIds);
+  writeCache(key, {
+    productIds: retainedIds,
+    sellingPrices: Object.fromEntries(
+      Object.entries(mergedPrices.sellingPrices).filter(([id]) => retainedSet.has(id)),
+    ),
+    mrps: Object.fromEntries(
+      Object.entries(mergedPrices.mrps).filter(([id]) => retainedSet.has(id)),
+    ),
+    priceCachedAtByProductId: Object.fromEntries(
+      Object.entries(mergedPrices.priceCachedAtByProductId || {}).filter(([id]) => retainedSet.has(id)),
+    ),
   });
 }
 
