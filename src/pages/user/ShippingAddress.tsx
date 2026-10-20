@@ -173,11 +173,16 @@ const ShippingAddressPage: React.FC = () => {
 
   const pricingItems = useMemo(
     () => activeCartItems.map((item) => ({
+      cartItemId: item.cartItemId,
       productId: item.product.id,
       productName: item.product.name,
       quantity: item.quantity,
       unitPrice: item.variantPrice ?? publicPriceMap[item.product.id] ?? item.product.price ?? 0,
       currency: item.product.currency || 'INR',
+      selectedVariantId: item.selectedVariantId,
+      selectedVariantSku: item.selectedVariantSku,
+      selectedSize: item.selectedSize,
+      selectedColor: item.selectedColor,
     })),
     [activeCartItems, publicPriceMap],
   );

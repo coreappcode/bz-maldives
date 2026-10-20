@@ -5,6 +5,7 @@ type TableRow = Record<string, any>;
 const hoisted = vi.hoisted(() => ({
   mockTables: {} as Record<string, TableRow[]>,
   mockRpcRows: {} as Record<string, TableRow[]>,
+  mockRpcCalls: [] as Array<{ functionName: string; args: Record<string, any> }>,
   mockFetchOk: true as boolean,
   mockFetchRate: 120 as number,
   mockFetchCalls: [] as Array<{ url: string; body: any }>,
@@ -65,10 +66,21 @@ function buildQuery(tableName: string) {
 vi.mock('../lib/supabase', () => ({
   supabase: {
     from: (tableName: string) => buildQuery(tableName),
-    rpc: async (functionName: string) => ({
-      data: hoisted.mockRpcRows[functionName] || [],
-      error: null,
-    }),
+    rpc: async (functionName: string, args: Record<string, any> = {}) => {
+      hoisted.mockRpcCalls.push({ functionName, args });
+      const rows = hoisted.mockRpcRows[functionName] || [];
+      if (rows.length === 0 && functionName === 'get_public_product_prices_with_overrides') {
+        return {
+          data: Object.entries(args.p_price_overrides || {}).map(([productId, price]) => ({
+            product_id: productId,
+            selling_price: price,
+            markup_mrp: price,
+          })),
+          error: null,
+        };
+      }
+      return { data: rows, error: null };
+    },
   },
 }));
 
@@ -153,6 +165,7 @@ vi.mock('../utils/currency', () => ({
 }));
 
 import { calculateDestinationCheckoutPricing } from '../lib/checkoutPricingService';
+import { fetchVerifiedVariantPrices } from '../lib/pricingService';
 
 describe('checkout pricing simulation: legacy + shiprocket', () => {
   beforeEach(() => {
@@ -160,6 +173,8 @@ describe('checkout pricing simulation: legacy + shiprocket', () => {
     hoisted.mockFetchOk = true;
     hoisted.mockFetchRate = 120;
     hoisted.mockRpcRows = {};
+    hoisted.mockRpcCalls = [];
+    setTable('product_variants', []);
 
     setRpcRows('get_active_checkout_min_order_rules', [
       { origin_iso2: 'IN', destination_iso2: 'GB', min_order_inr: 3200 },
@@ -233,6 +248,80 @@ describe('checkout pricing simulation: legacy + shiprocket', () => {
 
     // Empty profiles simulates buyer role RLS where seller profile country may not be readable.
     setTable('profiles', []);
+  });
+
+  it('prices multiple selected variants of the same product independently', async () => {
+    setTable('product_variants', [
+      { id: 'variant-459', product_id: 'modern-p2', sku: 'SKU-459', size: 'Small', color: 'Silver', price: 459 },
+      { id: 'variant-499', product_id: 'modern-p2', sku: 'SKU-499', size: 'Large', color: 'Silver', price: 499 },
+    ]);
+
+    const pricing = await calculateDestinationCheckoutPricing({
+      items: [
+        {
+          cartItemId: 'cart-small',
+          productId: 'modern-p2',
+          productName: 'Variant Product',
+          quantity: 1,
+          unitPrice: 459,
+          currency: 'INR',
+          selectedVariantId: 'variant-459',
+          selectedVariantSku: 'SKU-459',
+          selectedSize: 'Small',
+          selectedColor: 'Silver',
+        },
+        {
+          cartItemId: 'cart-large',
+          productId: 'modern-p2',
+          productName: 'Variant Product',
+          quantity: 1,
+          unitPrice: 459,
+          currency: 'INR',
+          selectedVariantId: 'variant-499',
+          selectedVariantSku: 'SKU-499',
+          selectedSize: 'Large',
+          selectedColor: 'Silver',
+        },
+      ],
+      destinationCountry: 'India',
+      rates: { INR: 83, USD: 1 },
+    });
+
+    expect(pricing.items.map((item) => [item.cartItemId, item.sourceUnitPrice, item.selectedVariantSku])).toEqual([
+      ['cart-small', 459, 'SKU-459'],
+      ['cart-large', 499, 'SKU-499'],
+    ]);
+    expect(pricing.subtotal).toBe(958);
+  });
+
+  it('rejects missing, invalid, or ambiguous variant selections instead of using the parent price', async () => {
+    setTable('product_variants', [
+      { id: 'variant-one', product_id: 'modern-p2', sku: 'SKU-ONE', size: 'One', color: 'Silver', price: 499 },
+      { id: 'variant-two', product_id: 'modern-p2', sku: 'SKU-TWO', size: 'Two', color: 'Silver', price: 599 },
+    ]);
+
+    const missing = await fetchVerifiedVariantPrices([
+      { key: 'cart-1', productId: 'modern-p2' },
+    ], 'India');
+    const invalid = await fetchVerifiedVariantPrices([
+      { key: 'cart-1', productId: 'modern-p2', variantSku: 'SKU-DELETED' },
+    ], 'India');
+    const ambiguous = await fetchVerifiedVariantPrices([
+      { key: 'cart-1', productId: 'modern-p2', selectedColor: 'Silver' },
+    ], 'India');
+
+    expect(missing.error).toMatch(/variant must be selected/i);
+    expect(invalid.error).toMatch(/unavailable or has changed/i);
+    expect(ambiguous.error).toMatch(/cannot be uniquely verified/i);
+  });
+
+  it('keeps non-variant products on the existing product-price path', async () => {
+    const result = await fetchVerifiedVariantPrices([
+      { key: 'cart-1', productId: 'modern-p2' },
+    ], 'India');
+
+    expect(result).toEqual({ data: {}, error: null });
+    expect(hoisted.mockRpcCalls).toHaveLength(0);
   });
 
   it('India checkout: legacy item remains eligible and Shiprocket live rate is applied', async () => {

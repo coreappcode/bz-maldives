@@ -116,11 +116,16 @@ const OrderSummaryPage: React.FC = () => {
 
   const pricingItems = useMemo(
     () => activeCartItems.map((item) => ({
+      cartItemId: item.cartItemId,
       productId: item.product.id,
       productName: item.product.name,
       quantity: item.quantity,
       unitPrice: item.variantPrice ?? publicPriceMap[item.product.id] ?? item.product.price ?? 0,
       currency: item.product.currency || 'INR',
+      selectedVariantId: item.selectedVariantId,
+      selectedVariantSku: item.selectedVariantSku,
+      selectedSize: item.selectedSize,
+      selectedColor: item.selectedColor,
     })),
     [activeCartItems, publicPriceMap],
   );
@@ -282,6 +287,16 @@ const OrderSummaryPage: React.FC = () => {
     () => new Map((pricing?.items || []).map((item) => [item.productId, item])),
     [pricing]
   );
+  const pricingByCartItemId = useMemo(
+    () => new Map((pricing?.items || []).filter((item) => item.cartItemId).map((item) => [item.cartItemId!, item])),
+    [pricing],
+  );
+  const getPricingLine = (cartItem: (typeof activeCartItems)[number]) => (
+    pricingByCartItemId.get(cartItem.cartItemId)
+    || (cartItem.selectedVariantId || cartItem.selectedVariantSku || cartItem.selectedSize || cartItem.selectedColor
+      ? undefined
+      : pricingByProductId.get(cartItem.product.id))
+  );
   const targetCurrency = (
     pricing?.currency || (IS_MALDIVES_STOREFRONT ? MALDIVES_CURRENCY_CODE : 'INR')
   ).toUpperCase();
@@ -305,7 +320,7 @@ const OrderSummaryPage: React.FC = () => {
 
   // SL30: Block checkout if any item is missing a converted price (prevents wrong-currency fallback)
   const hasMissingConvertedPrices = Boolean(
-    pricing && activeCartItems.some((item) => !pricingByProductId.get(item.product.id)?.convertedUnitPrice)
+    pricing && activeCartItems.some((item) => !getPricingLine(item)?.convertedUnitPrice)
   );
 
   const intlOptions = pricing?.intlShippingOptions;
@@ -372,13 +387,13 @@ const OrderSummaryPage: React.FC = () => {
       return;
     }
 
-    if (!pricing || pricing.total <= 0) {
-      setProceedError('Pricing is still loading. Please wait a moment and try again.');
+    if (pricingError) {
+      setProceedError(pricingError);
       return;
     }
 
-    if (pricingError) {
-      setProceedError(pricingError);
+    if (!pricing || pricing.total <= 0) {
+      setProceedError('Pricing is still loading. Please wait a moment and try again.');
       return;
     }
 
@@ -432,19 +447,31 @@ const OrderSummaryPage: React.FC = () => {
       return;
     }
 
+    const checkoutItems = activeCartItems
+      .map((item) => {
+        const pricingLine = getPricingLine(item);
+        return pricingLine ? { item, pricingLine } : null;
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    if (checkoutItems.length !== activeCartItems.length) {
+      setProceedError('A selected item or variant price could not be verified. Return to your cart and select it again.');
+      return;
+    }
+
     navigate('/checkout/payment', {
       state: {
-        items: activeCartItems.map((item) => ({
+        items: checkoutItems.map(({ item, pricingLine }) => ({
           cartItemId: item.cartItemId,
           productId: item.product.id,
           productName: item.product.name,
           quantity: item.quantity,
-          price: pricingByProductId.get(item.product.id)?.convertedUnitPrice ?? 0,
-          buyerUnitPrice: pricingByProductId.get(item.product.id)?.convertedUnitPrice ?? 0,
+          price: pricingLine.convertedUnitPrice,
+          buyerUnitPrice: pricingLine.convertedUnitPrice,
           sellerId: item.product.seller_id,
           selectedSize: item.selectedSize || undefined,
           selectedColor: item.selectedColor || undefined,
-          selectedVariantSku: item.selectedVariantSku || undefined,
+          selectedVariantId: pricingLine.selectedVariantId || item.selectedVariantId || undefined,
+          selectedVariantSku: pricingLine.selectedVariantSku || item.selectedVariantSku || undefined,
           productImage: item.product.image_url || (item.product.images?.[0]) || '',
         })),
         totalAmount: calculateTotal(),
@@ -590,20 +617,20 @@ const OrderSummaryPage: React.FC = () => {
                         {categoryLabel && <p className="text-[12px] text-[#666]">{categoryLabel}</p>}
                         <div className="flex items-center gap-4 mt-1.5">
                           <span className="text-[15px] font-bold text-[#b12704]">
-                            {pricingByProductId.get(item.product.id)?.convertedUnitPrice
-                              ? formatCurrency(pricingByProductId.get(item.product.id)!.convertedUnitPrice, targetCurrency)
+                            {getPricingLine(item)?.convertedUnitPrice
+                              ? formatCurrency(getPricingLine(item)!.convertedUnitPrice, targetCurrency)
                               : <span className="text-gray-400 text-xs animate-pulse">Pricing…</span>}
                           </span>
                           <span className="text-[12px] text-[#555] bg-[#f0f0f0] px-2.5 py-0.5 rounded">Qty: {item.quantity}</span>
                         </div>
-                        {(pricingByProductId.get(item.product.id)?.offerDiscount || 0) > 0 && (
+                        {(getPricingLine(item)?.offerDiscount || 0) > 0 && (
                           <p className="text-[12px] text-[#067d62] font-semibold mt-1">
-                            -{formatCurrency(pricingByProductId.get(item.product.id)?.offerDiscount || 0, targetCurrency)} offer
+                            -{formatCurrency(getPricingLine(item)?.offerDiscount || 0, targetCurrency)} offer
                           </p>
                         )}
-                        {pricingByProductId.get(item.product.id)?.minQuantityWarning && (
+                        {getPricingLine(item)?.minQuantityWarning && (
                           <p className="text-[12px] text-amber-600 font-medium mt-0.5">
-                            {pricingByProductId.get(item.product.id)?.minQuantityWarning}
+                            {getPricingLine(item)?.minQuantityWarning}
                           </p>
                         )}
                         <p className="text-[12px] text-[#067d62] font-semibold mt-1">✓ {(!pricing || pricingLoading) ? <span className="animate-pulse text-gray-400">Calculating delivery...</span> : (pricing.shipping || 0) === 0 ? 'FREE Delivery' : 'Delivery Included'}</p>

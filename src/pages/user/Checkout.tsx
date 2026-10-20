@@ -93,6 +93,7 @@ interface CheckoutItem {
   sellerId?: string;
   selectedSize?: string;
   selectedColor?: string;
+  selectedVariantId?: string;
   selectedVariantSku?: string;
   productImage?: string;
 }
@@ -365,7 +366,9 @@ const buildCheckoutRpcItems = (
     variant_info: {
       size: item.selectedSize || null,
       color: item.selectedColor || null,
-      sku: item.selectedVariantSku || meta?.sku || null,
+      sku: item.selectedVariantId || item.selectedVariantSku || item.selectedSize || item.selectedColor
+        ? item.selectedVariantSku || null
+        : meta?.sku || null,
       hsn_code: meta?.hsn_code || null,
     },
   };
@@ -597,11 +600,16 @@ const CheckoutForm: React.FC<
   const fetchCodLiveQuote = useCallback(async (): Promise<CodLiveQuote> => {
     const quote = await calculateDestinationCheckoutPricing({
       items: items.map((item) => ({
+        cartItemId: item.cartItemId,
         productId: item.productId,
         productName: item.productName,
         quantity: item.quantity,
         unitPrice: item.price,
         currency: checkoutCurrency || 'INR',
+        selectedVariantId: item.selectedVariantId,
+        selectedVariantSku: item.selectedVariantSku,
+        selectedSize: item.selectedSize,
+        selectedColor: item.selectedColor,
       })),
       destinationCountry: shippingAddress.country || '',
       destinationPostalCode: shippingAddress.postalCode || '',
@@ -1263,7 +1271,9 @@ const CheckoutForm: React.FC<
           variant_info: {
             size: item.selectedSize || null,
             color: item.selectedColor || null,
-            sku: item.selectedVariantSku || meta?.sku || null,
+            sku: item.selectedVariantId || item.selectedVariantSku || item.selectedSize || item.selectedColor
+              ? item.selectedVariantSku || null
+              : meta?.sku || null,
             hsn_code: meta?.hsn_code || null,
           },
         };
@@ -1678,11 +1688,16 @@ const Checkout: React.FC = () => {
       try {
         const quote = await calculateDestinationCheckoutPricing({
           items: checkoutData.items.map((item) => ({
+            cartItemId: item.cartItemId,
             productId: item.productId,
             productName: item.productName,
             quantity: item.quantity,
             unitPrice: item.price,
             currency: checkoutData.currency || 'INR',
+            selectedVariantId: item.selectedVariantId,
+            selectedVariantSku: item.selectedVariantSku,
+            selectedSize: item.selectedSize,
+            selectedColor: item.selectedColor,
           })),
           destinationCountry: checkoutData.shippingAddress.country || '',
           destinationPostalCode: checkoutData.shippingAddress.postalCode || '',
@@ -1875,11 +1890,16 @@ const Checkout: React.FC = () => {
 
       const codQuote = await calculateDestinationCheckoutPricing({
         items: items.map((item) => ({
+          cartItemId: item.cartItemId,
           productId: item.productId,
           productName: item.productName,
           quantity: item.quantity,
           unitPrice: item.price,
           currency: checkoutCurrency || 'INR',
+          selectedVariantId: item.selectedVariantId,
+          selectedVariantSku: item.selectedVariantSku,
+          selectedSize: item.selectedSize,
+          selectedColor: item.selectedColor,
         })),
         destinationCountry: shippingAddress.country || '',
         destinationPostalCode: shippingAddress.postalCode || '',
@@ -1908,7 +1928,9 @@ const Checkout: React.FC = () => {
           variant_info: {
             size: item.selectedSize || null,
             color: item.selectedColor || null,
-            sku: item.selectedVariantSku || meta?.sku || null,
+            sku: item.selectedVariantId || item.selectedVariantSku || item.selectedSize || item.selectedColor
+              ? item.selectedVariantSku || null
+              : meta?.sku || null,
             hsn_code: meta?.hsn_code || null,
           },
         };

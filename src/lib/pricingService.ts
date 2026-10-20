@@ -7,6 +7,23 @@ export interface PublicProductPrice {
   markupMrp: number;
 }
 
+export interface VariantPriceRequest {
+  key: string;
+  productId: string;
+  variantId?: string | null;
+  variantSku?: string | null;
+  selectedSize?: string | null;
+  selectedColor?: string | null;
+}
+
+export interface VerifiedVariantPrice {
+  productId: string;
+  variantId: string;
+  variantSku: string;
+  sellingPrice: number;
+  markupMrp: number;
+}
+
 export interface CheckoutPricingItem {
   productId: string;
   quantity: number;
@@ -34,6 +51,115 @@ const toNumber = (value: unknown): number => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
 };
+
+const normalizeVariantValue = (value?: string | null) => String(value || '').trim().toLowerCase();
+
+export async function fetchVerifiedVariantPrices(
+  requests: VariantPriceRequest[],
+  country?: string | null,
+): Promise<{ data: Record<string, VerifiedVariantPrice>; error: string | null }> {
+  const validRequests = requests.filter((request) => request.key && request.productId);
+  if (validRequests.length === 0) {
+    return { data: {}, error: null };
+  }
+
+  const productIds = Array.from(new Set(validRequests.map((request) => request.productId)));
+  const { data: variantRows, error: variantQueryError } = await supabase
+    .from('product_variants')
+    .select('id, product_id, sku, price, size, color')
+    .in('product_id', productIds);
+
+  if (variantQueryError) {
+    return { data: {}, error: `Unable to verify selected product variants: ${variantQueryError.message}` };
+  }
+
+  const variantsByProduct = new Map<string, Array<Record<string, unknown>>>();
+  (variantRows || []).forEach((row: Record<string, unknown>) => {
+    const productId = String(row.product_id || '');
+    if (!productId) return;
+    const rows = variantsByProduct.get(productId) || [];
+    rows.push(row);
+    variantsByProduct.set(productId, rows);
+  });
+
+  const selectedVariants: Array<{ key: string; productId: string; row: Record<string, unknown> }> = [];
+  for (const request of validRequests) {
+    const variants = variantsByProduct.get(request.productId) || [];
+    const variantId = String(request.variantId || '').trim();
+    const variantSku = String(request.variantSku || '').trim();
+    const selectedSize = normalizeVariantValue(request.selectedSize);
+    const selectedColor = normalizeVariantValue(request.selectedColor);
+    const hasSelection = Boolean(variantId || variantSku || selectedSize || selectedColor);
+
+    if (variants.length === 0) {
+      if (hasSelection) {
+        return { data: {}, error: 'A selected product variant is no longer available. Return to your cart and select it again.' };
+      }
+      continue;
+    }
+
+    if (!hasSelection) {
+      return { data: {}, error: 'A product variant must be selected before checkout. Return to your cart and select an available variant.' };
+    }
+
+    const matches = variants.filter((row) => {
+      if (variantId && String(row.id || '') !== variantId) return false;
+      if (variantSku && String(row.sku || '').trim().toLowerCase() !== variantSku.toLowerCase()) return false;
+      if (
+        selectedSize
+        && normalizeVariantValue(String(row.size || '')) !== selectedSize
+        && normalizeVariantValue(String(row.size_value || '')) !== selectedSize
+      ) return false;
+      if (selectedColor && normalizeVariantValue(String(row.color || '')) !== selectedColor) return false;
+      return true;
+    });
+
+    if (matches.length !== 1) {
+      return {
+        data: {},
+        error: matches.length === 0
+          ? 'The selected product variant is unavailable or has changed. Return to your cart and select it again.'
+          : 'The selected product variant cannot be uniquely verified. Return to your cart and select it again.',
+      };
+    }
+
+    const row = matches[0];
+    const id = String(row.id || '').trim();
+    const sku = String(row.sku || '').trim();
+    const basePrice = Number(row.price);
+    if (!id || !sku || !Number.isFinite(basePrice) || basePrice <= 0) {
+      return { data: {}, error: 'The selected product variant has incomplete pricing information. Please contact support.' };
+    }
+    selectedVariants.push({ key: request.key, productId: request.productId, row });
+  }
+
+  const pricesByKey: Record<string, VerifiedVariantPrice> = {};
+  for (const variant of selectedVariants) {
+    const basePrice = Number(variant.row.price);
+    const { data, error } = await fetchPublicProductPrices(
+      [variant.productId],
+      country,
+      { [variant.productId]: basePrice },
+    );
+    if (error) {
+      return { data: {}, error: `Unable to verify the selected variant price: ${error}` };
+    }
+    const priceRow = data.find((row) => row.productId === variant.productId);
+    if (!priceRow || !Number.isFinite(priceRow.publicUnitPrice) || priceRow.publicUnitPrice <= 0) {
+      return { data: {}, error: 'The selected product variant could not be priced. Return to your cart and try again.' };
+    }
+
+    pricesByKey[variant.key] = {
+      productId: variant.productId,
+      variantId: String(variant.row.id),
+      variantSku: String(variant.row.sku).trim(),
+      sellingPrice: priceRow.sellingPrice,
+      markupMrp: priceRow.markupMrp,
+    };
+  }
+
+  return { data: pricesByKey, error: null };
+}
 
 export async function fetchPublicProductPrices(
   productIds: string[],

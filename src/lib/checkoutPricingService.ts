@@ -5,13 +5,19 @@ import {
   isMaldivesCountry,
   MALDIVES_CURRENCY_CODE,
 } from '../config/market';
+import { fetchVerifiedVariantPrices } from './pricingService';
 
 export interface CheckoutPricingInputItem {
+  cartItemId?: string;
   productId: string;
   productName: string;
   quantity: number;
   unitPrice: number;
   currency: string;
+  selectedVariantId?: string | null;
+  selectedVariantSku?: string | null;
+  selectedSize?: string | null;
+  selectedColor?: string | null;
 }
 
 export interface IneligibleCheckoutItem {
@@ -21,6 +27,7 @@ export interface IneligibleCheckoutItem {
 }
 
 export interface CheckoutPricingLine {
+  cartItemId?: string;
   productId: string;
   productName: string;
   quantity: number;
@@ -31,6 +38,8 @@ export interface CheckoutPricingLine {
   convertedShippingTotal: number;
   offerDiscount: number;
   minQuantityWarning?: string;
+  selectedVariantId?: string;
+  selectedVariantSku?: string;
 }
 
 export interface IntlShippingOption {
@@ -448,17 +457,40 @@ export async function calculateDestinationCheckoutPricing(input: {
   const destinationTokenSet = buildCountryTokenSet(destinationCountry, destinationToken);
   const destinationLooksIndia = Array.from(destinationTokenSet).some((token) => INDIA_COUNTRY_TOKENS.has(token));
 
+  const verifiedVariantPrices = await fetchVerifiedVariantPrices(
+    filteredItems.map((item, index) => ({
+      key: String(index),
+      productId: item.productId,
+      variantId: item.selectedVariantId,
+      variantSku: item.selectedVariantSku,
+      selectedSize: item.selectedSize,
+      selectedColor: item.selectedColor,
+    })),
+    destinationCountry || null,
+  );
+  if (verifiedVariantPrices.error) {
+    throw new Error(verifiedVariantPrices.error);
+  }
+  const variantPriceByIndex = verifiedVariantPrices.data;
+  const nonVariantProductIds = Array.from(new Set(
+    filteredItems
+      .filter((_, index) => !variantPriceByIndex[String(index)])
+      .map((item) => item.productId),
+  ));
+
   const markupPriceByProductId = new Map<string, number>();
   try {
-    const { data: markupRows, error: markupErr } = await supabase.rpc(
-      'get_public_product_prices',
-      { p_product_ids: productIds, p_country: destinationCountry || null }
-    );
-    if (!markupErr && Array.isArray(markupRows)) {
-      for (const row of markupRows as Array<{ product_id: string; selling_price: unknown }>) {
-        const price = Number(row.selling_price);
-        if (row.product_id && Number.isFinite(price) && price > 0) {
-          markupPriceByProductId.set(String(row.product_id), price);
+    if (nonVariantProductIds.length > 0) {
+      const { data: markupRows, error: markupErr } = await supabase.rpc(
+        'get_public_product_prices',
+        { p_product_ids: nonVariantProductIds, p_country: destinationCountry || null }
+      );
+      if (!markupErr && Array.isArray(markupRows)) {
+        for (const row of markupRows as Array<{ product_id: string; selling_price: unknown }>) {
+          const price = Number(row.selling_price);
+          if (row.product_id && Number.isFinite(price) && price > 0) {
+            markupPriceByProductId.set(String(row.product_id), price);
+          }
         }
       }
     }
@@ -821,7 +853,7 @@ export async function calculateDestinationCheckoutPricing(input: {
   };
   const intlItemsWithWeight: IntlWeightItem[] = [];
 
-  for (const item of filteredItems) {
+  for (const [itemIndex, item] of filteredItems.entries()) {
     const productRow = productById.get(item.productId);
     const profileCountryId = sellerCountryBySellerId.get(String(productRow?.seller_id || '')) || '';
     const profileCountryName = profileCountryId ? (countryNameById.get(profileCountryId) || '') : '';
@@ -873,11 +905,14 @@ export async function calculateDestinationCheckoutPricing(input: {
 
     // Markup prices inherit each product's source currency.
     // Fallback unitPrice keeps the caller-provided source currency.
-    const hasMarkupPrice = markupPriceByProductId.has(item.productId);
-    const sourceUnitPrice = hasMarkupPrice
-      ? markupPriceByProductId.get(item.productId)!
-      : asFinite(item.unitPrice);
-    const sourceCurrency = hasMarkupPrice
+    const verifiedVariantPrice = variantPriceByIndex[String(itemIndex)];
+    const hasMarkupPrice = !verifiedVariantPrice && markupPriceByProductId.has(item.productId);
+    const sourceUnitPrice = verifiedVariantPrice
+      ? verifiedVariantPrice.sellingPrice
+      : hasMarkupPrice
+        ? markupPriceByProductId.get(item.productId)!
+        : asFinite(item.unitPrice);
+    const sourceCurrency = verifiedVariantPrice || hasMarkupPrice
       ? (productCurrencyByProductId.get(item.productId) || (item.currency || 'INR').toUpperCase())
       : (item.currency || 'INR').toUpperCase();
     const sourceLineTotal = sourceUnitPrice * item.quantity;
@@ -967,6 +1002,7 @@ export async function calculateDestinationCheckoutPricing(input: {
     const convertedOfferDiscount = roundTo2(convertAmount(sourceOfferDiscount, sourceCurrency, targetCurrency, input.rates));
 
     lines.push({
+      cartItemId: item.cartItemId,
       productId: item.productId,
       productName: item.productName,
       quantity: item.quantity,
@@ -976,6 +1012,8 @@ export async function calculateDestinationCheckoutPricing(input: {
       convertedLineTotal,
       convertedShippingTotal,
       offerDiscount: convertedOfferDiscount,
+      selectedVariantId: verifiedVariantPrice?.variantId,
+      selectedVariantSku: verifiedVariantPrice?.variantSku,
       minQuantityWarning,
     });
 

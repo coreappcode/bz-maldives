@@ -9,7 +9,12 @@ import { useCurrency } from '../../contexts/CurrencyContext';
 import { useWishlist } from '../../contexts/WishlistContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { ShoppingCart, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
-import { calculateCheckoutPricing, fetchPublicProductPrices, type CheckoutPricingResult } from '../../lib/pricingService';
+import {
+  calculateCheckoutPricing,
+  fetchPublicProductPrices,
+  fetchVerifiedVariantPrices,
+  type CheckoutPricingResult,
+} from '../../lib/pricingService';
 import { useDestinationCountry } from '../../hooks/useDestinationCountry';
 import { isNativePlatform } from '../../mobile/nativePlatform';
 
@@ -28,6 +33,8 @@ export const CartPage: React.FC = () => {
   // home page / product details page). This is the single source of truth for display
   // prices and is NOT affected by the calculateCheckoutPricing country timing issue.
   const [publicPriceMap, setPublicPriceMap] = useState<Record<string, number>>({});
+  const [variantPriceMap, setVariantPriceMap] = useState<Record<string, number>>({});
+  const [variantPriceError, setVariantPriceError] = useState<string | null>(null);
   const [, setPublicPriceLoading] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
@@ -93,28 +100,67 @@ export const CartPage: React.FC = () => {
   // Fetch per-item markup prices (same RPC used by home/product pages).
   // selectedCountry may be empty on first render; the effect re-runs when it resolves.
   useEffect(() => {
+    let cancelled = false;
     const loadPublicPrices = async () => {
       if (!selectedCountry) {
         setPublicPriceMap({});
+        setVariantPriceMap({});
         setPublicPriceLoading(true);
         return;
       }
 
       if (cartItems.length === 0) {
         setPublicPriceMap({});
+        setVariantPriceMap({});
+        setVariantPriceError(null);
         setPublicPriceLoading(false);
         return;
       }
 
       setPublicPriceLoading(true);
-      const ids = Array.from(new Set(cartItems.map((i) => i.product.id)));
-      const { data } = await fetchPublicProductPrices(ids, selectedCountry);
-      const map: Record<string, number> = {};
-      (data || []).forEach((row) => { map[row.productId] = row.publicUnitPrice; });
-      setPublicPriceMap(map);
-      setPublicPriceLoading(false);
+      try {
+        const variantResult = await fetchVerifiedVariantPrices(
+          cartItems.map((item) => ({
+            key: item.cartItemId,
+            productId: item.product.id,
+            variantId: item.selectedVariantId,
+            variantSku: item.selectedVariantSku,
+            selectedSize: item.selectedSize,
+            selectedColor: item.selectedColor,
+          })),
+          selectedCountry,
+        );
+        if (cancelled) return;
+        setVariantPriceError(variantResult.error);
+        if (variantResult.error) {
+          console.error('[Cart] Unable to verify selected variant pricing:', variantResult.error);
+          setVariantPriceMap({});
+        } else {
+          setVariantPriceMap(Object.fromEntries(
+            Object.entries(variantResult.data).map(([key, price]) => [key, price.sellingPrice]),
+          ));
+        }
+        const ids = Array.from(new Set(cartItems.map((i) => i.product.id)));
+        const { data } = await fetchPublicProductPrices(ids, selectedCountry);
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        (data || []).forEach((row) => { map[row.productId] = row.publicUnitPrice; });
+        setPublicPriceMap(map);
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Unable to verify cart pricing.';
+          console.error('[Cart] Failed to load prices:', error);
+          setVariantPriceError(message);
+          setVariantPriceMap({});
+        }
+      } finally {
+        if (!cancelled) setPublicPriceLoading(false);
+      }
     };
     void loadPublicPrices();
+    return () => {
+      cancelled = true;
+    };
   }, [cartItems, selectedCountry]);
 
   useEffect(() => {
@@ -180,15 +226,18 @@ export const CartPage: React.FC = () => {
     void loadPricing();
   }, [selectedCartItems, selectedCountry, publicPriceMap]);
 
-  const pricingByProductId = new Map(
-    (pricing?.items || []).map((item) => [item.productId, item])
+  const pricingByProductId = new Map((pricing?.items || []).map((item) => [item.productId, item]));
+  const hasVariantSelection = (item: (typeof cartItems)[number]) => Boolean(
+    item.selectedVariantId || item.selectedVariantSku || item.selectedSize || item.selectedColor,
   );
   const hasResolvedSelectedPrices = selectedCartItems.every((item) => {
+    if (hasVariantSelection(item)) {
+      return typeof variantPriceMap[item.cartItemId] === 'number';
+    }
     return typeof publicPriceMap[item.product.id] === 'number'
       || typeof pricingByProductId.get(item.product.id)?.publicUnitPrice === 'number'
-      || typeof item.variantPrice === 'number'
       || typeof item.product.price === 'number';
-  });
+  }) && !variantPriceError;
   const handleCheckout = () => {
     if (selectedCartItems.length === 0) {
       alert('PLEASE SELECT ANY ITEM TO PROCEED');
@@ -231,12 +280,11 @@ export const CartPage: React.FC = () => {
 
   /* ─── Compute display subtotal from selected items (L1: convert each to user currency) ─── */
   const displaySubtotal = selectedCartItems.reduce((sum, item) => {
-    // Priority: variantPrice (markup-resolved at PDP add-to-cart) > publicPriceMap > checkout RPC > seller base price
-    const unit =
-      item.variantPrice ??
-      publicPriceMap[item.product.id] ??
-      pricingByProductId.get(item.product.id)?.publicUnitPrice ??
-      item.product.price;
+    const unit = hasVariantSelection(item)
+      ? variantPriceMap[item.cartItemId]
+      : publicPriceMap[item.product.id]
+        ?? pricingByProductId.get(item.product.id)?.publicUnitPrice
+        ?? item.product.price;
 
     if (typeof unit !== 'number') {
       return sum;
@@ -312,11 +360,11 @@ export const CartPage: React.FC = () => {
                 style={isNativePlatform ? { display: 'block', overflow: 'visible' } : undefined}
               >
                 {cartItems.map((cartItem) => {
-                const itemPrice =
-                  cartItem.variantPrice ??
-                  publicPriceMap[cartItem.product.id] ??
-                  pricingByProductId.get(cartItem.product.id)?.publicUnitPrice ??
-                  cartItem.product.price;
+                const itemPrice = hasVariantSelection(cartItem)
+                  ? variantPriceMap[cartItem.cartItemId]
+                  : publicPriceMap[cartItem.product.id]
+                    ?? pricingByProductId.get(cartItem.product.id)?.publicUnitPrice
+                    ?? cartItem.product.price;
                 const isUpdating = updatingId === cartItem.cartItemId;
 
                 return (
@@ -458,6 +506,12 @@ export const CartPage: React.FC = () => {
                 <div className="bg-white border border-[#ddd] rounded-[10px] p-4 sm:p-5">
                 <h2 className="hidden text-[18px] font-bold text-[#0f1111] mb-4 md:block">Cart Summary</h2>
 
+                {variantPriceError && (
+                  <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 font-semibold">
+                    {variantPriceError}
+                  </div>
+                )}
+
                 <div className="flex justify-between text-[14px] mb-2">
                   <span className="text-[#555]">Subtotal ({selectedCartItems.length} item{selectedCartItems.length !== 1 ? 's' : ''})</span>
                   <span className="font-semibold text-[#0f1111]">
@@ -473,6 +527,7 @@ export const CartPage: React.FC = () => {
 
                 <button
                   onClick={handleCheckout}
+                  disabled={!hasResolvedSelectedPrices}
                   className="w-full mt-4 py-3.5 bg-[#ffd814] border border-[#fcd200] rounded-[10px] text-[15px] font-bold text-[#0f1111] cursor-pointer hover:bg-[#f7ca00] active:bg-[#e8b800] transition-colors"
                 >
                   Proceed to Checkout →
