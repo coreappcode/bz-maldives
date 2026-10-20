@@ -15,6 +15,18 @@ import type { HeaderDetectedLocation } from '../components/layout/Header';
 import {
   getActiveSponsoredProductsBySection,
 } from '../lib/sponsoredProductsService';
+import {
+  HOME_CONTENT_CACHE_TTL_MS,
+  HOME_PRICE_CACHE_TTL_MS,
+  isCacheFresh,
+  readHomeBannersCache,
+  readHomePricesCache,
+  readHomeSectionsCache,
+  writeHomeBannersCache,
+  writeHomePricesCache,
+  writeHomeSectionsCache,
+  type HomePageBanner,
+} from '../lib/homePageCache';
 import { fetchPublicProductPrices } from '../lib/pricingService';
 import { fetchProductsBySection } from '../lib/productService';
 
@@ -138,18 +150,18 @@ export const BzeadHomePage: React.FC = () => {
   const { user, currentAuthUser } = useAuth();
   const isLoggedIn = !!user;
 
-  const [featured, setFeatured] = useState<Product[]>([]);
-  const [deals, setDeals] = useState<Product[]>([]);
-  const [trending, setTrending] = useState<Product[]>([]);
+  const [cachedSections] = useState(readHomeSectionsCache);
+  const [cachedBanners] = useState(readHomeBannersCache);
+  const [featured, setFeatured] = useState<Product[]>(() => cachedSections?.value.featured || []);
+  const [deals, setDeals] = useState<Product[]>(() => cachedSections?.value.deals || []);
+  const [trending, setTrending] = useState<Product[]>(() => cachedSections?.value.trending || []);
   const [publicPriceMap, setPublicPriceMap] = useState<Record<string, number>>({});
   const [publicMrpMap, setPublicMrpMap] = useState<Record<string, number>>({});
   const [publicPriceLoading, setPublicPriceLoading] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [hasSponsored, setHasSponsored] = useState(false);
-  type AdItem = { id: string; src: string; alt: string; link: string };
-  const [adSlot1, setAdSlot1] = useState<AdItem[]>([]);
-  const [adSlot2, setAdSlot2] = useState<AdItem[]>([]);
-  const [adSlot3, setAdSlot3] = useState<AdItem[]>([]);
+  const [loading, setLoading] = useState(!cachedSections);
+  const [hasSponsored, setHasSponsored] = useState(() => cachedSections?.value.hasSponsored || false);
+  const [adBanners, setAdBanners] = useState<HomePageBanner[]>(() => cachedBanners?.value || []);
+  const priceRequestRef = React.useRef(0);
   const [detectedCountry, setDetectedCountry] = useState(() => {
     const cached = localStorage.getItem('beauzead_detected_country');
     return cached || '';
@@ -164,75 +176,136 @@ export const BzeadHomePage: React.FC = () => {
     userCountry: user?.country || '',
   }) || detectedCountry;
 
+  const adSlot1 = adBanners.filter((banner) => banner.adSlot === 1);
+  const adSlot2 = adBanners.filter((banner) => banner.adSlot === 2);
+  const adSlot3 = adBanners.filter((banner) => banner.adSlot === 3);
+
   useEffect(() => {
     let cancelled = false;
-    let timerId: ReturnType<typeof setInterval> | null = null;
+    let lastRefreshAt = cachedSections?.cachedAt || 0;
 
-    const loadSponsored = async (showLoading = false) => {
-      if (showLoading) setLoading(true);
-      const active = await getActiveSponsoredProductsBySection();
+    const refreshSections = async () => {
+      try {
+        const active = await getActiveSponsoredProductsBySection();
+        const noSponsoredData =
+          active.featured.length === 0
+          && active['hot-deals'].length === 0
+          && active.trending.length === 0;
 
-      const noSponsoredData =
-        active.featured.length === 0 &&
-        active['hot-deals'].length === 0 &&
-        active.trending.length === 0;
+        let nextSections = {
+          featured: active.featured,
+          deals: active['hot-deals'],
+          trending: active.trending,
+          hasSponsored: !noSponsoredData,
+        };
 
-      if (noSponsoredData) {
-        const [featuredFallback, dealsFallback, trendingFallback] = await Promise.all([
-          fetchProductsBySection('featured', HOMEPAGE_SECTION_MAX),
-          fetchProductsBySection('hot-deals', HOMEPAGE_SECTION_MAX),
-          fetchProductsBySection('trending', HOMEPAGE_SECTION_MAX),
-        ]);
+        if (noSponsoredData) {
+          const [featuredFallback, dealsFallback, trendingFallback] = await Promise.all([
+            fetchProductsBySection('featured', HOMEPAGE_SECTION_MAX),
+            fetchProductsBySection('hot-deals', HOMEPAGE_SECTION_MAX),
+            fetchProductsBySection('trending', HOMEPAGE_SECTION_MAX),
+          ]);
 
-        if (!cancelled) {
-          setFeatured((featuredFallback.data || []) as Product[]);
-          setDeals((dealsFallback.data || []) as Product[]);
-          setTrending((trendingFallback.data || []) as Product[]);
-          setHasSponsored(false);
-          setLoading(false);
+          const failedSection = [featuredFallback, dealsFallback, trendingFallback]
+            .find((result) => result.error);
+          if (failedSection) {
+            throw new Error(failedSection.error || 'Unable to refresh home page products.');
+          }
+
+          nextSections = {
+            featured: (featuredFallback.data || []) as Product[],
+            deals: (dealsFallback.data || []) as Product[],
+            trending: (trendingFallback.data || []) as Product[],
+            hasSponsored: false,
+          };
         }
-        return;
-      }
 
-      if (!cancelled) {
-        setFeatured(active.featured);
-        setDeals(active['hot-deals']);
-        setTrending(active.trending);
-        setHasSponsored(true);
+        if (cancelled) return;
+        setFeatured(nextSections.featured);
+        setDeals(nextSections.deals);
+        setTrending(nextSections.trending);
+        setHasSponsored(nextSections.hasSponsored);
         setLoading(false);
+        writeHomeSectionsCache(nextSections);
+        lastRefreshAt = Date.now();
+      } catch (error) {
+        console.error('Failed to refresh home page products:', error);
+        if (!cancelled && !cachedSections) setLoading(false);
       }
     };
 
-    (async () => {
-      await loadSponsored(true);
-      timerId = setInterval(() => {
-        void loadSponsored(false);
-      }, 60000);
-    })();
+    if (!cachedSections || !isCacheFresh(cachedSections, HOME_CONTENT_CACHE_TTL_MS)) {
+      void refreshSections();
+    }
+
+    const timerId = window.setInterval(() => {
+      if (Date.now() - lastRefreshAt >= HOME_CONTENT_CACHE_TTL_MS) {
+        void refreshSections();
+      }
+    }, HOME_CONTENT_CACHE_TTL_MS);
 
     return () => {
       cancelled = true;
-      if (timerId) clearInterval(timerId);
+      window.clearInterval(timerId);
     };
-  }, []);
+  }, [cachedSections]);
 
   useEffect(() => {
-    supabase
-      .from('banners')
-      .select('id, title, image_url, link, ad_slot')
-      .eq('is_active', true)
-      .eq('banner_type', 'ad')
-      .order('position', { ascending: true })
-      .then(({ data }) => {
-        if (!data || data.length === 0) return;
-        const toItem = (b: any): AdItem => ({ id: b.id, src: b.image_url, alt: b.title, link: b.link || '' });
-        setAdSlot1(data.filter((b) => b.ad_slot === 1).map(toItem));
-        setAdSlot2(data.filter((b) => b.ad_slot === 2).map(toItem));
-        setAdSlot3(data.filter((b) => b.ad_slot === 3).map(toItem));
-      });
-  }, []);
+    let cancelled = false;
+    let lastRefreshAt = cachedBanners?.cachedAt || 0;
+
+    const refreshBanners = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('banners')
+          .select('id, title, image_url, link, ad_slot')
+          .eq('is_active', true)
+          .eq('banner_type', 'ad')
+          .order('position', { ascending: true });
+
+        if (error) {
+          console.error('Failed to refresh home page banners:', error);
+          return;
+        }
+
+        const nextBanners = (data || []).map((banner) => ({
+          id: banner.id,
+          src: banner.image_url,
+          alt: banner.title,
+          link: banner.link || '',
+          adSlot: Number(banner.ad_slot),
+        }));
+
+        if (cancelled) return;
+        setAdBanners(nextBanners);
+        writeHomeBannersCache(nextBanners);
+        lastRefreshAt = Date.now();
+      } catch (error) {
+        console.error('Failed to refresh home page banners:', error);
+      }
+    };
+
+    if (!cachedBanners || !isCacheFresh(cachedBanners, HOME_CONTENT_CACHE_TTL_MS)) {
+      void refreshBanners();
+    }
+
+    const timerId = window.setInterval(() => {
+      if (Date.now() - lastRefreshAt >= HOME_CONTENT_CACHE_TTL_MS) {
+        void refreshBanners();
+      }
+    }, HOME_CONTENT_CACHE_TTL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timerId);
+    };
+  }, [cachedBanners]);
 
   useEffect(() => {
+    const requestId = priceRequestRef.current + 1;
+    priceRequestRef.current = requestId;
+    let cancelled = false;
+
     const loadPublicPrices = async () => {
       if (!selectedCountry) {
         setPublicPriceMap({});
@@ -254,8 +327,25 @@ export const BzeadHomePage: React.FC = () => {
         return;
       }
 
-      setPublicPriceLoading(true);
-      const { data } = await fetchPublicProductPrices(productIds, selectedCountry);
+      const cachedPrices = readHomePricesCache(selectedCountry, productIds);
+      if (cachedPrices) {
+        setPublicPriceMap(cachedPrices.value.sellingPrices);
+        setPublicMrpMap(cachedPrices.value.mrps);
+        setPublicPriceLoading(false);
+        if (isCacheFresh(cachedPrices, HOME_PRICE_CACHE_TTL_MS)) return;
+      } else {
+        setPublicPriceMap({});
+        setPublicMrpMap({});
+        setPublicPriceLoading(true);
+      }
+
+      const { data, error } = await fetchPublicProductPrices(productIds, selectedCountry);
+      if (cancelled || priceRequestRef.current !== requestId) return;
+      if (error) {
+        console.error('Failed to refresh home page prices:', error);
+        if (!cachedPrices) setPublicPriceLoading(false);
+        return;
+      }
 
       const map: Record<string, number> = {};
       const mrpMap: Record<string, number> = {};
@@ -267,9 +357,17 @@ export const BzeadHomePage: React.FC = () => {
       setPublicPriceMap(map);
       setPublicMrpMap(mrpMap);
       setPublicPriceLoading(false);
+      writeHomePricesCache(selectedCountry, {
+        productIds,
+        sellingPrices: map,
+        mrps: mrpMap,
+      });
     };
 
     void loadPublicPrices();
+    return () => {
+      cancelled = true;
+    };
   }, [featured, deals, trending, selectedCountry]);
 
   const featuredMax = Math.min(featured.length, HOMEPAGE_SECTION_MAX);
